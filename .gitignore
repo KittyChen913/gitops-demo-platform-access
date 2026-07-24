@@ -1,0 +1,14 @@
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+tfplan
+*.tfplan
+*.tfplan.json
+backend.local.hcl
+firewall-baseline.json
+id_ed25519
+id_ed25519.pub
+known_hosts
+inventory.runtime.yml
+.env
