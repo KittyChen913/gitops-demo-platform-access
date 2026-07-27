@@ -5,7 +5,7 @@
 ## Ownership
 
 - 本 Repository 擁有 Shared OpenVPN BASE、Reserved IPv4、VPN Server Firewall、Internal DNS、routing/NAT、一般 User groups、credential bootstrap 與 network SSM outputs。
-- 不管理 LKE、Worker Firewall、Argo CD、application manifests 或一般 VPN User lifecycle。
+- 不管理 LKE、Worker Firewall、ArgoCD、application manifests 或一般 VPN User lifecycle。
 - 目前不實作 Dev／Prod endpoint SYNC；沒有 runtime evidence 的功能不得預先加入。
 
 ## 實作規則
@@ -16,6 +16,15 @@
 - `config/shared.json` 是 Shared BASE 的 canonical configuration。
 - Credential、Secret、Terraform state、plan JSON 與 private key 不得輸出到 log、summary 或 artifact。
 - Runtime 操作必須維持 runner `/32`、strict host-key pin、baseline cleanup 與 fail-closed 行為。
+
+## 註解與顯示文字規範
+
+- 人工維護的 Terraform、GitHub Actions、Ansible、設定檔與 Shell 註解必須使用繁體中文。
+- 專有名詞、產品名稱、API、資源種類、欄位名稱、命令、路徑與識別字可保留英文，但英文專有名詞必須放在中文敘述中，不得以完整英文句子撰寫註解。
+- Workflow／job／step、composite action 的 `name` 與 `description` 必須使用英文。
+- 程式碼內的文字必須使用英文，包括 Terraform `description`／`error_message`、CLI 文字、log、error、warning、summary 與其他執行訊息。
+- 產品名稱的唯一允許拼法為 `ArgoCD`。
+- README 與 docs 使用繁體中文敘述；自動生成註解、shebang、lint directive 與被註解掉的程式碼不需翻譯或改寫。
 
 ## 驗證
 
