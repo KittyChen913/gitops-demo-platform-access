@@ -1,0 +1,185 @@
+---
+- name: Read Access Server configuration
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, ConfigQuery]
+  register: openvpn_config_query
+  changed_when: false
+  no_log: true
+  tags: server-settings
+
+- name: Parse Access Server configuration
+  ansible.builtin.set_fact:
+    openvpn_config: "{{ openvpn_config_query.stdout | from_json }}"
+  no_log: true
+  tags: server-settings
+
+- name: Define BASE-only split-tunnel settings
+  ansible.builtin.set_fact:
+    openvpn_base_settings:
+      vpn.client.routing.reroute_gw: "false"
+      vpn.client.routing.reroute_dns: custom
+      vpn.server.dhcp_option.dns.0: "{{ internal_dns_server_ip }}"
+      vpn.server.routing.gateway_access: "true"
+      vpn.server.routing.private_access: nat
+  tags: server-settings
+
+- name: Apply changed BASE Access Server settings
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --key
+      - "{{ item.key }}"
+      - --value
+      - "{{ item.value }}"
+      - ConfigPut
+  loop: "{{ openvpn_base_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (openvpn_config.get(item.key, '') | string) != (item.value | string)
+  notify: Apply Access Server changes
+  tags: server-settings
+
+- name: Read BASE group properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ item }}"
+      - UserPropGet
+  loop: "{{ openvpn_access_groups }}"
+  register: openvpn_group_queries
+  changed_when: false
+  no_log: true
+  tags: access-groups
+
+- name: Build BASE group property map
+  ansible.builtin.set_fact:
+    openvpn_group_properties: >-
+      {{ openvpn_group_properties | default({}) |
+         combine({item.item: ((item.stdout | from_json).get(item.item, {}))}) }}
+  loop: "{{ openvpn_group_queries.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+  tags: access-groups
+
+- name: Declare approved BASE groups
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - group_declare
+      - --value
+      - "true"
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: >-
+    openvpn_group_properties[item].get('group_declare', 'false') |
+    string | lower != 'true'
+  notify: Apply Access Server changes
+  tags: access-groups
+
+- name: Ensure approved identities are Access Server groups
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - type
+      - --value
+      - group
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: openvpn_group_properties[item].get('type', '') != 'group'
+  notify: Apply Access Server changes
+  tags: access-groups
+
+- name: Force BASE groups to ordinary non-admin role
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - prop_superuser
+      - --value
+      - "false"
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: >-
+    openvpn_group_properties[item].get('prop_superuser', '') |
+    string | lower != 'false'
+  notify: Apply Access Server changes
+  tags: access-groups
+
+- name: Disable auto-login for every BASE group
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - prop_autologin
+      - --value
+      - "false"
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: >-
+    openvpn_group_properties[item].get('prop_autologin', '') |
+    string | lower != 'false'
+  notify: Apply Access Server changes
+  tags: access-groups
+
+- name: Read OpenVPN administrator properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ openvpn_admin_username }}"
+      - UserPropGet
+  register: openvpn_admin_query
+  changed_when: false
+  no_log: true
+  tags: admin-identity
+
+- name: Parse OpenVPN administrator properties
+  ansible.builtin.set_fact:
+    openvpn_admin_properties: >-
+      {{ (openvpn_admin_query.stdout | from_json)
+         .get(openvpn_admin_username, {}) }}
+    openvpn_admin_required_properties:
+      type: user_connect
+      user_auth_type: local
+      prop_superuser: "true"
+      prop_deny: "false"
+      prop_deny_web: "false"
+  no_log: true
+  tags: admin-identity
+
+- name: Enforce the local OpenVPN administrator contract
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_admin_username }}"
+      - --key
+      - "{{ item.key }}"
+      - --value
+      - "{{ item.value }}"
+      - UserPropPut
+  loop: "{{ openvpn_admin_required_properties | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: >-
+    (openvpn_admin_properties.get(item.key, '') | string | lower) !=
+    (item.value | string | lower)
+  no_log: true
+  notify: Apply Access Server changes
+  tags: admin-identity
+
+- name: Apply administrator identity changes before authentication
+  ansible.builtin.meta: flush_handlers
+  tags: admin-identity
