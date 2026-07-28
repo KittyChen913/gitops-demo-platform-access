@@ -22,7 +22,7 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      plan_sha256: ${{ steps.create_plan.outputs.plan_sha256 }}
+      plan_sha256: ${{ steps.verify_plan.outputs.plan_sha256 }}
     steps:
       - name: "Checkout"
         uses: actions/checkout@v7
@@ -69,8 +69,7 @@ jobs:
           aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
 
-      - name: "Create and verify authoritative saved plan"
-        id: create_plan
+      - name: "Terraform init"
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
         run: |
@@ -88,21 +87,27 @@ jobs:
               backend_selector="terraform_backend"
               ;;
           esac
-          backend_file="${work}/${DEPLOYMENT}-backend.hcl"
-          plan_file="${bundle}/terraform.tfplan"
-          plan_json="${work}/${DEPLOYMENT}.tfplan.json"
-          cleanup() {
-            unset linode_token contact_email ssh_public_key 2>/dev/null || true
-            rm -f "${backend_file}" "${plan_json}"
-          }
-          trap cleanup EXIT
 
           mkdir -p "${bundle}" "${work}"
           umask 077
+          backend_file="${work}/${DEPLOYMENT}-backend.hcl"
           jq -r --arg key "${backend_selector}" \
             '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' \
             "${config}" > "${backend_file}"
           terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+
+          {
+            printf 'TF_ROOT=%s\n' "${root}"
+            printf 'PLAN_WORK=%s\n' "${work}"
+            printf 'PLAN_FILE=%s\n' "${bundle}/terraform.tfplan"
+          } >> "${GITHUB_ENV}"
+
+      - name: "Terraform plan"
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
 
           if [[ "${DEPLOYMENT}" == "base" ]]; then
             linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
@@ -116,19 +121,24 @@ jobs:
             LINODE_TOKEN="${linode_token}" \
               TF_VAR_openvpn_contact_email="${contact_email}" \
               TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
-              terraform -chdir="${root}" plan -input=false -refresh=true -lock=false -out="${plan_file}"
+              terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${PLAN_FILE}"
           else
-            terraform -chdir="${root}" plan -input=false -refresh=true -lock=false -out="${plan_file}"
+            terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${PLAN_FILE}"
           fi
 
-          terraform -chdir="${root}" show -json "${plan_file}" > "${plan_json}"
+      - name: "Verify plan policy"
+        id: verify_plan
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+        run: |
+          set -euo pipefail
+          plan_json="${PLAN_WORK}/${DEPLOYMENT}.tfplan.json"
+          terraform -chdir="${TF_ROOT}" show -json "${PLAN_FILE}" > "${plan_json}"
           bash scripts/verify-plan-policy.sh "${plan_json}" "${DEPLOYMENT}" apply
-          plan_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
+          plan_sha256="$(sha256sum "${PLAN_FILE}" | awk '{print $1}')"
           [[ "${plan_sha256}" =~ ^[0-9a-f]{64}$ ]]
           printf 'plan_sha256=%s\n' "${plan_sha256}" >> "${GITHUB_OUTPUT}"
-          trap - EXIT
-          cleanup
-          rm -rf "${work}"
+          rm -f "${plan_json}" "${PLAN_WORK}/${DEPLOYMENT}-backend.hcl"
 
       - name: "Upload minimal saved-plan artifact"
         uses: actions/upload-artifact@v7
@@ -196,7 +206,7 @@ jobs:
           aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
 
-      - name: "Apply only the tagged saved plan"
+      - name: "Terraform init"
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
         run: |
@@ -214,34 +224,47 @@ jobs:
               backend_selector="terraform_backend"
               ;;
           esac
-          backend_file="${work}/${DEPLOYMENT}-backend.hcl"
-          plan_file="${bundle}/terraform.tfplan"
-          cleanup() {
-            unset linode_token 2>/dev/null || true
-            rm -f "${backend_file}"
-          }
-          trap cleanup EXIT
 
           mkdir -p "${work}"
           umask 077
+          backend_file="${work}/${DEPLOYMENT}-backend.hcl"
           jq -r --arg key "${backend_selector}" \
             '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' \
             "${config}" > "${backend_file}"
           terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
 
+          {
+            printf 'TF_ROOT=%s\n' "${root}"
+            printf 'APPLY_WORK=%s\n' "${work}"
+            printf 'PLAN_FILE=%s\n' "${bundle}/terraform.tfplan"
+          } >> "${GITHUB_ENV}"
+
+      - name: "Verify required SSM parameters exist"
+        if: inputs.deployment == 'base'
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          for required_path in \
+            "$(jq -r '.aws.ssm_parameter_paths.openvpn_admin_password' "${config}")" \
+            "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" \
+            "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"; do
+            aws ssm get-parameter --name "${required_path}" --query Parameter.Name --output text >/dev/null
+          done
+
+      - name: "Terraform apply"
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+
           if [[ "${DEPLOYMENT}" == "base" ]]; then
-            for required_path in \
-              "$(jq -r '.aws.ssm_parameter_paths.openvpn_admin_password' "${config}")" \
-              "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" \
-              "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"; do
-              aws ssm get-parameter --name "${required_path}" --query Parameter.Name --output text >/dev/null
-            done
             linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
             linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
             echo "::add-mask::${linode_token}"
-            LINODE_TOKEN="${linode_token}" terraform -chdir="${root}" apply -input=false "${plan_file}"
+            LINODE_TOKEN="${linode_token}" terraform -chdir="${TF_ROOT}" apply -input=false "${PLAN_FILE}"
           else
-            terraform -chdir="${root}" apply -input=false "${plan_file}"
+            terraform -chdir="${TF_ROOT}" apply -input=false "${PLAN_FILE}"
           fi
 
       - name: "Remove runner apply bundle"
