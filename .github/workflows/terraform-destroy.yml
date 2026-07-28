@@ -23,7 +23,6 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      approval_environment: ${{ steps.destroy_boundary.outputs.approval_environment }}
       base_plan_sha256: ${{ steps.create_plans.outputs.base_plan_sha256 }}
       credential_plan_sha256: ${{ steps.create_plans.outputs.credential_bootstrap_plan_sha256 }}
     steps:
@@ -33,7 +32,6 @@ jobs:
           terraform_version: 1.13.5
 
       - name: "Validate destroy boundary"
-        id: destroy_boundary
         env:
           CONFIRMATION: ${{ inputs.confirmation }}
           GIT_REF: ${{ github.ref }}
@@ -41,9 +39,6 @@ jobs:
           set -euo pipefail
           test "${GIT_REF}" = "$(jq -r '.repository.operations_ref' config/shared.json)"
           test "${CONFIRMATION}" = "DESTROY-SHARED-ALL"
-          approval_environment="$(jq -r '.github.destroy_approval_environment' config/shared.json)"
-          test -n "${approval_environment}"
-          printf 'approval_environment=%s\n' "${approval_environment}" >> "${GITHUB_OUTPUT}"
 
       - name: "Validate version-controlled destroy contract"
         run: |
@@ -52,8 +47,7 @@ jobs:
             .schema_version == 2 and
             .repository.operations_ref == "refs/heads/master" and
             .repository.deployment_tag_prefix == "v" and
-            (.github.destroy_approval_environment | type == "string" and length > 0) and
-            (.aws.destroy_oidc_role_name | type == "string" and length > 0) and
+            (.aws.oidc_role_name | type == "string" and length > 0) and
             .terraform_backend.use_lockfile == true and
             .credential_bootstrap_backend.use_lockfile == true
           ' config/shared.json >/dev/null
@@ -144,8 +138,6 @@ jobs:
     name: "Apply verified destroy plans"
     needs: plan
     runs-on: ubuntu-latest
-    environment:
-      name: ${{ needs.plan.outputs.approval_environment }}
     permissions:
       actions: read
       contents: read
@@ -189,7 +181,7 @@ jobs:
         run: |
           set -euo pipefail
           aws_region="$(jq -r '.aws.region' config/shared.json)"
-          role_name="$(jq -r '.aws.destroy_oidc_role_name' config/shared.json)"
+          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
           printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
           printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
 
