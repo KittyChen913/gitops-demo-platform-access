@@ -1,0 +1,250 @@
+name: "Platform Access reusable deployment stage"
+
+on:
+  workflow_call:
+    inputs:
+      deployment:
+        description: "Terraform root"
+        required: true
+        type: string
+    secrets:
+      AWS_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: "Plan [${{ inputs.deployment }}]"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      plan_sha256: ${{ steps.create_plan.outputs.plan_sha256 }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.13.5"
+
+      - name: "Validate deployment input"
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+        run: |
+          set -euo pipefail
+          case "${DEPLOYMENT}" in credential-bootstrap|base) ;; *) exit 1 ;; esac
+
+      - name: "Validate version-controlled deployment contract"
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schema_version == 2 and
+            .repository.operations_ref == "refs/heads/master" and
+            .repository.deployment_tag_prefix == "v" and
+            .terraform_backend.use_lockfile == true and
+            .credential_bootstrap_backend.use_lockfile == true and
+            .linode.marketplace_stackscript_id == 401719 and
+            .linode.image == "linode/ubuntu24.04"
+          ' config/shared.json >/dev/null
+
+      - name: "Prepare AWS OIDC inputs"
+        id: aws_oidc_inputs
+        run: |
+          set -euo pipefail
+          aws_region="$(jq -r '.aws.region' config/shared.json)"
+          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
+          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
+          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Configure AWS credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+
+      - name: "Create and verify authoritative saved plan"
+        id: create_plan
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          bundle="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan"
+          work="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-plan-work"
+          case "${DEPLOYMENT}" in
+            credential-bootstrap)
+              root="terraform/environments/shared/credential-bootstrap"
+              backend_selector="credential_bootstrap_backend"
+              ;;
+            base)
+              root="terraform/environments/shared/base"
+              backend_selector="terraform_backend"
+              ;;
+          esac
+          backend_file="${work}/${DEPLOYMENT}-backend.hcl"
+          plan_file="${bundle}/terraform.tfplan"
+          plan_json="${work}/${DEPLOYMENT}.tfplan.json"
+          cleanup() {
+            unset linode_token contact_email ssh_public_key 2>/dev/null || true
+            rm -f "${backend_file}" "${plan_json}"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "${bundle}" "${work}"
+          umask 077
+          jq -r --arg key "${backend_selector}" \
+            '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' \
+            "${config}" > "${backend_file}"
+          terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+
+          if [[ "${DEPLOYMENT}" == "base" ]]; then
+            linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
+            contact_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_contact_email' "${config}")"
+            public_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"
+            linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
+            contact_email="$(aws ssm get-parameter --name "${contact_path}" --with-decryption --query Parameter.Value --output text)"
+            ssh_public_key="$(aws ssm get-parameter --name "${public_key_path}" --query Parameter.Value --output text)"
+            echo "::add-mask::${linode_token}"
+            echo "::add-mask::${contact_email}"
+            LINODE_TOKEN="${linode_token}" \
+              TF_VAR_openvpn_contact_email="${contact_email}" \
+              TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
+              terraform -chdir="${root}" plan -input=false -refresh=true -lock=false -out="${plan_file}"
+          else
+            terraform -chdir="${root}" plan -input=false -refresh=true -lock=false -out="${plan_file}"
+          fi
+
+          terraform -chdir="${root}" show -json "${plan_file}" > "${plan_json}"
+          bash scripts/verify-plan-policy.sh "${plan_json}" "${DEPLOYMENT}" apply
+          plan_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
+          [[ "${plan_sha256}" =~ ^[0-9a-f]{64}$ ]]
+          printf 'plan_sha256=%s\n' "${plan_sha256}" >> "${GITHUB_OUTPUT}"
+          trap - EXIT
+          cleanup
+          rm -rf "${work}"
+
+      - name: "Upload minimal saved-plan artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-access-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-access-${{ inputs.deployment }}-apply-plan/terraform.tfplan
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: "Remove runner plan bundle"
+        if: always()
+        run: |
+          rm -rf \
+            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-plan" \
+            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-plan-work"
+
+  apply-tagged-plan:
+    name: "Apply [${{ inputs.deployment }}]"
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.13.5"
+
+      - name: "Download this run's saved plan"
+        uses: actions/download-artifact@v5
+        with:
+          name: platform-access-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-access-${{ inputs.deployment }}-apply-plan
+
+      - name: "Verify saved plan checksum before credentials"
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+          EXPECTED_PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          plan_file="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan/terraform.tfplan"
+          test -f "${plan_file}"
+          test ! -L "${plan_file}"
+          [[ "${EXPECTED_PLAN_SHA256}" =~ ^[0-9a-f]{64}$ ]]
+          actual_plan_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
+          test "${actual_plan_sha256}" = "${EXPECTED_PLAN_SHA256}"
+
+      - name: "Prepare AWS OIDC inputs"
+        id: aws_oidc_inputs
+        run: |
+          set -euo pipefail
+          aws_region="$(jq -r '.aws.region' config/shared.json)"
+          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
+          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
+          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Configure AWS credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+
+      - name: "Apply only the tagged saved plan"
+        env:
+          DEPLOYMENT: ${{ inputs.deployment }}
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          bundle="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan"
+          work="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-work"
+          case "${DEPLOYMENT}" in
+            credential-bootstrap)
+              root="terraform/environments/shared/credential-bootstrap"
+              backend_selector="credential_bootstrap_backend"
+              ;;
+            base)
+              root="terraform/environments/shared/base"
+              backend_selector="terraform_backend"
+              ;;
+          esac
+          backend_file="${work}/${DEPLOYMENT}-backend.hcl"
+          plan_file="${bundle}/terraform.tfplan"
+          cleanup() {
+            unset linode_token 2>/dev/null || true
+            rm -f "${backend_file}"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "${work}"
+          umask 077
+          jq -r --arg key "${backend_selector}" \
+            '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' \
+            "${config}" > "${backend_file}"
+          terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+
+          if [[ "${DEPLOYMENT}" == "base" ]]; then
+            for required_path in \
+              "$(jq -r '.aws.ssm_parameter_paths.openvpn_admin_password' "${config}")" \
+              "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" \
+              "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"; do
+              aws ssm get-parameter --name "${required_path}" --query Parameter.Name --output text >/dev/null
+            done
+            linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
+            linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
+            echo "::add-mask::${linode_token}"
+            LINODE_TOKEN="${linode_token}" terraform -chdir="${root}" apply -input=false "${plan_file}"
+          else
+            terraform -chdir="${root}" apply -input=false "${plan_file}"
+          fi
+
+      - name: "Remove runner apply bundle"
+        if: always()
+        run: |
+          rm -rf \
+            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-plan" \
+            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-work"

@@ -1,0 +1,103 @@
+name: "Platform Access tagged deployment"
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  actions: read
+  contents: read
+  id-token: write
+
+concurrency:
+  group: "platform-access-mutation"
+  cancel-in-progress: false
+
+jobs:
+  validate-deployment-tag:
+    name: "Validate deployment Tag"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: "Checkout complete history"
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: "Validate Tag contract and master ancestry"
+        run: |
+          set -euo pipefail
+          config="config/shared.json"
+          tag_prefix="$(jq -r '.repository.deployment_tag_prefix' "${config}")"
+          operations_ref="$(jq -r '.repository.operations_ref' "${config}")"
+          expected_ref_prefix="refs/tags/${tag_prefix}"
+
+          test "${GITHUB_REPOSITORY}" = "$(jq -r '.repository.slug' "${config}")"
+          test "${tag_prefix}" = "v"
+          test "${operations_ref}" = "refs/heads/master"
+          [[ "${GITHUB_REF}" == "${expected_ref_prefix}"* ]]
+          version="${GITHUB_REF#"${expected_ref_prefix}"}"
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+
+          operations_branch="${operations_ref#refs/heads/}"
+          remote_operations_ref="refs/remotes/origin/${operations_branch}"
+          git show-ref --verify --quiet "${remote_operations_ref}"
+          git merge-base --is-ancestor "${GITHUB_SHA}" "${remote_operations_ref}"
+          printf 'Approved deployment Tag: %s\n' "${GITHUB_REF}"
+
+  static-validation:
+    name: "Terraform Validate [${{ matrix.root }}]"
+    needs: validate-deployment-tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        root:
+          - terraform/environments/shared/credential-bootstrap
+          - terraform/environments/shared/base
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.13.5"
+
+      - name: "Terraform init without backend"
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: "Terraform format check"
+        run: terraform fmt -check -recursive -diff
+
+      - name: "Terraform validate"
+        run: terraform validate -no-color
+
+  credential-bootstrap:
+    name: "Deploy credential-bootstrap"
+    needs: static-validation
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      deployment: credential-bootstrap
+    secrets: inherit
+
+  base:
+    name: "Deploy BASE"
+    needs: credential-bootstrap
+    uses: ./.github/workflows/terraform-apply.yml
+    with:
+      deployment: base
+    secrets: inherit
+
+  configure-base:
+    name: "Configure BASE"
+    needs: base
+    uses: ./.github/workflows/platform-base-configure.yml
+    secrets: inherit

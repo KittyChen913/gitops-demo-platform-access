@@ -1,5 +1,10 @@
 {
   "schema_version": 2,
+  "repository": {
+    "slug": "KittyChen913/gitops-demo-platform-access",
+    "operations_ref": "refs/heads/master",
+    "deployment_tag_prefix": "v"
+  },
   "aws": {
     "region": "ap-southeast-1",
     "oidc_role_name": "github-oidc-gitops-demo-platform-access-role",
@@ -38,6 +43,12 @@
   "terraform_backend": {
     "bucket": "kc-gitops-demo-tfstate",
     "key": "gitops-demo-platform-access/shared/base/terraform.tfstate",
+    "encrypt": true,
+    "use_lockfile": true
+  },
+  "credential_bootstrap_backend": {
+    "bucket": "kc-gitops-demo-tfstate",
+    "key": "gitops-demo-platform-access/shared/credential-bootstrap/terraform.tfstate",
     "encrypt": true,
     "use_lockfile": true
   }
