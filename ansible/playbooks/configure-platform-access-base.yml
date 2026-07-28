@@ -29,6 +29,7 @@
       ansible.builtin.wait_for_connection:
         connect_timeout: 10
         timeout: 600
+      become: false
 
     - name: Read the Marketplace-generated automation credentials
       ansible.builtin.slurp:
