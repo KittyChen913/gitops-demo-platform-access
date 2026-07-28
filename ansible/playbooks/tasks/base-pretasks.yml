@@ -1,0 +1,87 @@
+---
+- name: Wait for strict-pinned SSH connectivity
+  ansible.builtin.wait_for_connection:
+    connect_timeout: 10
+    timeout: 600
+  become: false
+
+- name: Read the Marketplace-generated automation credentials
+  ansible.builtin.slurp:
+    src: "/home/{{ ansible_user }}/.credentials"
+  register: openvpn_marketplace_credentials_raw
+  become: false
+  no_log: true
+
+- name: Unlock sudo for the automation account
+  ansible.builtin.set_fact:
+    ansible_become_pass: >-
+      {{ (openvpn_marketplace_credentials_raw.content | b64decode |
+         regex_search('(?m)^Sudo Password:\s*(\S+)\s*$', '\1'))[0] }}
+  no_log: true
+
+- name: Gather Facts
+  ansible.builtin.setup:
+
+- name: Wait for Access Server web service
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ openvpn_admin_port }}"
+    timeout: 900
+
+- name: Verify Marketplace Access Server tools
+  ansible.builtin.stat:
+    path: /usr/local/openvpn_as/scripts/sacli
+  register: openvpn_sacli
+
+- name: Refuse non-Marketplace or invalid BASE contract
+  ansible.builtin.assert:
+    that:
+      - openvpn_sacli.stat.exists
+      - openvpn_sacli.stat.executable
+      - openvpn_admin_username == 'openvpn'
+      - internal_dns_server_ip == openvpn_server_tunnel_ip
+      - >-
+        openvpn_access_groups ==
+        ['dev-ops', 'prod-ops', 'platform-ops']
+    fail_msg: Shared BASE contract or Marketplace identity is invalid.
+  no_log: true
+
+- name: Verify openvpnas service is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, openvpnas]
+  changed_when: false
+
+- name: Discover the tunnel interface
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -o
+      - -4
+      - address
+      - show
+      - to
+      - "{{ internal_dns_server_ip }}/32"
+  register: tunnel_interface_result
+  changed_when: false
+  failed_when: tunnel_interface_result.stdout_lines | length != 1
+
+- name: Discover the default public interface
+  ansible.builtin.command:
+    argv: [ip, -4, route, show, default]
+  register: public_interface_result
+  changed_when: false
+  failed_when: public_interface_result.stdout_lines | length != 1
+
+- name: Record discovered interfaces
+  ansible.builtin.set_fact:
+    openvpn_tunnel_interface: >-
+      {{ tunnel_interface_result.stdout.split()[1] }}
+    openvpn_public_interface: >-
+      {{ public_interface_result.stdout.split()[4] }}
+
+- name: Keep public and tunnel interfaces isolated
+  ansible.builtin.assert:
+    that:
+      - openvpn_tunnel_interface | length > 0
+      - openvpn_public_interface | length > 0
+      - openvpn_tunnel_interface != openvpn_public_interface

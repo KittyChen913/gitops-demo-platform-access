@@ -1,0 +1,28 @@
+---
+- name: Verify Access Server status
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, status]
+  changed_when: false
+  tags: verify-openvpn
+
+- name: Verify dnsmasq configuration
+  ansible.builtin.command:
+    argv: [dnsmasq, --test]
+  changed_when: false
+  tags: verify-dnsmasq
+
+- name: Read active listeners
+  ansible.builtin.command:
+    argv: [ss, -lntup]
+  register: listeners
+  changed_when: false
+  tags: verify-dns-exposure
+
+- name: Refuse public or wildcard DNS listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        listeners.stdout is not
+        regex('(?m)(0\\.0\\.0\\.0|\\[::\\]|\\*):53\\b')
+    fail_msg: DNS is listening on a public or wildcard address.
+  tags: verify-dns-exposure

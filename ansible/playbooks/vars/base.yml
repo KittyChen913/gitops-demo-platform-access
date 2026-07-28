@@ -1,0 +1,19 @@
+---
+platform_config: >-
+  {{ lookup('ansible.builtin.file',
+  playbook_dir ~ '/../../config/shared.json') | from_json }}
+access_contract: >-
+  {{ lookup('ansible.builtin.file',
+  playbook_dir ~ '/../../config/access-groups.json') | from_json }}
+openvpn_admin_password: >-
+  {{ lookup('ansible.builtin.env', 'OPENVPN_ADMIN_PASSWORD') }}
+openvpn_tunnel_cidr: "{{ platform_config.network.vpn_client_cidr }}"
+openvpn_server_tunnel_ip: "{{ platform_config.network.internal_dns_ip }}"
+internal_dns_server_ip: "{{ platform_config.network.internal_dns_ip }}"
+upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"
+openvpn_admin_port: "{{ platform_config.linode.admin_port }}"
+openvpn_port: "{{ platform_config.linode.openvpn_port }}"
+openvpn_protocol: "{{ platform_config.linode.openvpn_protocol }}"
+openvpn_admin_username: >-
+  {{ platform_config.linode.openvpn_admin_username }}
+openvpn_access_groups: "{{ access_contract.groups }}"

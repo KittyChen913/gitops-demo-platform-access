@@ -4,115 +4,12 @@
   become: true
   gather_facts: false
 
-  vars:
-    platform_config: >-
-      {{ lookup('ansible.builtin.file',
-      playbook_dir ~ '/../../config/shared.json') | from_json }}
-    access_contract: >-
-      {{ lookup('ansible.builtin.file',
-      playbook_dir ~ '/../../config/access-groups.json') | from_json }}
-    openvpn_admin_password: >-
-      {{ lookup('ansible.builtin.env', 'OPENVPN_ADMIN_PASSWORD') }}
-    openvpn_tunnel_cidr: "{{ platform_config.network.vpn_client_cidr }}"
-    openvpn_server_tunnel_ip: "{{ platform_config.network.internal_dns_ip }}"
-    internal_dns_server_ip: "{{ platform_config.network.internal_dns_ip }}"
-    upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"
-    openvpn_admin_port: "{{ platform_config.linode.admin_port }}"
-    openvpn_port: "{{ platform_config.linode.openvpn_port }}"
-    openvpn_protocol: "{{ platform_config.linode.openvpn_protocol }}"
-    openvpn_admin_username: >-
-      {{ platform_config.linode.openvpn_admin_username }}
-    openvpn_access_groups: "{{ access_contract.groups }}"
+  vars_files:
+    - vars/base.yml
 
   pre_tasks:
-    - name: Wait for strict-pinned SSH connectivity
-      ansible.builtin.wait_for_connection:
-        connect_timeout: 10
-        timeout: 600
-      become: false
-
-    - name: Read the Marketplace-generated automation credentials
-      ansible.builtin.slurp:
-        src: "/home/{{ ansible_user }}/.credentials"
-      register: openvpn_marketplace_credentials_raw
-      become: false
-      no_log: true
-
-    - name: Unlock sudo for the automation account
-      ansible.builtin.set_fact:
-        ansible_become_pass: >-
-          {{ (openvpn_marketplace_credentials_raw.content | b64decode |
-             regex_search('(?m)^Sudo Password:\s*(\S+)\s*$', '\1'))[0] }}
-      no_log: true
-
-    - name: Gather Facts
-      ansible.builtin.setup:
-
-    - name: Wait for Access Server web service
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: "{{ openvpn_admin_port }}"
-        timeout: 900
-
-    - name: Verify Marketplace Access Server tools
-      ansible.builtin.stat:
-        path: /usr/local/openvpn_as/scripts/sacli
-      register: openvpn_sacli
-
-    - name: Refuse non-Marketplace or invalid BASE contract
-      ansible.builtin.assert:
-        that:
-          - openvpn_sacli.stat.exists
-          - openvpn_sacli.stat.executable
-          - openvpn_admin_password is string
-          - openvpn_admin_password | length >= 24
-          - openvpn_admin_username == 'openvpn'
-          - internal_dns_server_ip == openvpn_server_tunnel_ip
-          - >-
-            openvpn_access_groups ==
-            ['dev-ops', 'prod-ops', 'platform-ops']
-        fail_msg: Shared BASE contract or Marketplace identity is invalid.
-      no_log: true
-
-    - name: Verify openvpnas service is active
-      ansible.builtin.command:
-        argv: [systemctl, is-active, openvpnas]
-      changed_when: false
-
-    - name: Discover the tunnel interface
-      ansible.builtin.command:
-        argv:
-          - ip
-          - -o
-          - -4
-          - address
-          - show
-          - to
-          - "{{ internal_dns_server_ip }}/32"
-      register: tunnel_interface_result
-      changed_when: false
-      failed_when: tunnel_interface_result.stdout_lines | length != 1
-
-    - name: Discover the default public interface
-      ansible.builtin.command:
-        argv: [ip, -4, route, show, default]
-      register: public_interface_result
-      changed_when: false
-      failed_when: public_interface_result.stdout_lines | length != 1
-
-    - name: Record discovered interfaces
-      ansible.builtin.set_fact:
-        openvpn_tunnel_interface: >-
-          {{ tunnel_interface_result.stdout.split()[1] }}
-        openvpn_public_interface: >-
-          {{ public_interface_result.stdout.split()[4] }}
-
-    - name: Keep public and tunnel interfaces isolated
-      ansible.builtin.assert:
-        that:
-          - openvpn_tunnel_interface | length > 0
-          - openvpn_public_interface | length > 0
-          - openvpn_tunnel_interface != openvpn_public_interface
+    - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+    - ansible.builtin.import_tasks: tasks/assert-admin-password-contract.yml
 
   roles:
     - vpn_routing
@@ -121,29 +18,5 @@
     - host_firewall
 
   post_tasks:
-    - name: Apply handlers before verification
-      ansible.builtin.meta: flush_handlers
-
-    - name: Verify Access Server status
-      ansible.builtin.command:
-        argv: [/usr/local/openvpn_as/scripts/sacli, status]
-      changed_when: false
-
-    - name: Verify dnsmasq configuration
-      ansible.builtin.command:
-        argv: [dnsmasq, --test]
-      changed_when: false
-
-    - name: Read active listeners
-      ansible.builtin.command:
-        argv: [ss, -lntup]
-      register: listeners
-      changed_when: false
-
-    - name: Refuse public or wildcard DNS listener
-      ansible.builtin.assert:
-        that:
-          - >-
-            listeners.stdout is not
-            regex('(?m)(0\\.0\\.0\\.0|\\[::\\]|\\*):53\\b')
-        fail_msg: DNS is listening on a public or wildcard address.
+    - ansible.builtin.meta: flush_handlers
+    - ansible.builtin.import_tasks: tasks/base-postverify.yml
