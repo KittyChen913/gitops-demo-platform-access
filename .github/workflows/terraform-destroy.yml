@@ -1,17 +1,10 @@
-name: "Platform Access manual destroy"
+name: "Destroy platform access"
 
 on:
   workflow_dispatch:
     inputs:
-      target:
-        description: "Destroy BASE only, or BASE and credential bootstrap"
-        required: true
-        type: choice
-        options:
-          - base
-          - all
       confirmation:
-        description: "DESTROY-SHARED-BASE or DESTROY-SHARED-ALL"
+        description: "Type DESTROY-SHARED-ALL to confirm"
         required: true
         type: string
 
@@ -42,17 +35,12 @@ jobs:
       - name: "Validate destroy boundary"
         id: destroy_boundary
         env:
-          TARGET: ${{ inputs.target }}
           CONFIRMATION: ${{ inputs.confirmation }}
           GIT_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           test "${GIT_REF}" = "$(jq -r '.repository.operations_ref' config/shared.json)"
-          case "${TARGET}" in
-            base) test "${CONFIRMATION}" = "DESTROY-SHARED-BASE" ;;
-            all) test "${CONFIRMATION}" = "DESTROY-SHARED-ALL" ;;
-            *) exit 1 ;;
-          esac
+          test "${CONFIRMATION}" = "DESTROY-SHARED-ALL"
           approval_environment="$(jq -r '.github.destroy_approval_environment' config/shared.json)"
           test -n "${approval_environment}"
           printf 'approval_environment=%s\n' "${approval_environment}" >> "${GITHUB_OUTPUT}"
@@ -87,8 +75,6 @@ jobs:
 
       - name: "Create and verify destroy plans"
         id: create_plans
-        env:
-          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
@@ -136,9 +122,7 @@ jobs:
           }
 
           create_destroy_plan base terraform/environments/shared/base terraform_backend
-          if [[ "${TARGET}" == "all" ]]; then
-            create_destroy_plan credential-bootstrap terraform/environments/shared/credential-bootstrap credential_bootstrap_backend
-          fi
+          create_destroy_plan credential-bootstrap terraform/environments/shared/credential-bootstrap credential_bootstrap_backend
 
           trap - EXIT
           unset linode_token contact_email ssh_public_key 2>/dev/null || true
@@ -190,7 +174,6 @@ jobs:
 
       - name: "Verify saved plan checksums before credentials"
         env:
-          TARGET: ${{ inputs.target }}
           BASE_PLAN_SHA256: ${{ needs.plan.outputs.base_plan_sha256 }}
           CREDENTIAL_PLAN_SHA256: ${{ needs.plan.outputs.credential_plan_sha256 }}
         run: |
@@ -209,12 +192,7 @@ jobs:
             test "${actual_sha256}" = "${expected_sha256}"
           }
           verify_bundle base "${BASE_PLAN_SHA256}"
-          if [[ "${TARGET}" == "all" ]]; then
-            verify_bundle credential-bootstrap "${CREDENTIAL_PLAN_SHA256}"
-          else
-            test ! -e "${bundle}/credential-bootstrap"
-            test -z "${CREDENTIAL_PLAN_SHA256}"
-          fi
+          verify_bundle credential-bootstrap "${CREDENTIAL_PLAN_SHA256}"
 
       - name: "Prepare destroy AWS OIDC inputs"
         id: aws_oidc_inputs
@@ -232,8 +210,6 @@ jobs:
           role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
 
       - name: "Apply verified destroy plans in dependency order"
-        env:
-          TARGET: ${{ inputs.target }}
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
@@ -275,8 +251,6 @@ jobs:
           fi
           rm -f "${host_key_error}"
 
-          if [[ "${TARGET}" == "all" ]]; then
-            credential_root="terraform/environments/shared/credential-bootstrap"
-            prepare_destroy_plan credential-bootstrap "${credential_root}" credential_bootstrap_backend
-            terraform -chdir="${credential_root}" apply -input=false "${bundle}/credential-bootstrap/terraform.tfplan"
-          fi
+          credential_root="terraform/environments/shared/credential-bootstrap"
+          prepare_destroy_plan credential-bootstrap "${credential_root}" credential_bootstrap_backend
+          terraform -chdir="${credential_root}" apply -input=false "${bundle}/credential-bootstrap/terraform.tfplan"
