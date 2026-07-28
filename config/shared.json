@@ -3,10 +3,31 @@
   "aws": {
     "region": "ap-southeast-1",
     "ssm_parameter_paths": {
+      "linode_token": "/gitops/shared/LINODE_TOKEN",
+      "openvpn_contact_email": "/gitops/shared/OPENVPN_CONTACT_EMAIL",
       "openvpn_admin_password": "/gitops/platform-access/openvpn/ansible/OPENVPN_ADMIN_PASSWORD",
       "openvpn_ssh_private_key_b64": "/gitops/platform-access/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64",
-      "openvpn_ssh_public_key": "/gitops/platform-access/openvpn/ansible/OPENVPN_SSH_PUBLIC_KEY"
+      "openvpn_ssh_public_key": "/gitops/platform-access/openvpn/ansible/OPENVPN_SSH_PUBLIC_KEY",
+      "vpn_public_egress_ip": "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP",
+      "vpn_client_cidr": "/gitops/platform-access/network/VPN_CLIENT_CIDR",
+      "internal_dns_ip": "/gitops/platform-access/network/INTERNAL_DNS_IP"
     }
+  },
+  "linode": {
+    "region": "ap-south",
+    "instance_label": "openvpn-shared",
+    "instance_type": "g6-standard-1",
+    "image": "linode/ubuntu24.04",
+    "marketplace_stackscript_id": 401719,
+    "automation_username": "vpnadmin",
+    "openvpn_port": 1194,
+    "openvpn_protocol": "udp",
+    "admin_port": 943
+  },
+  "network": {
+    "vpn_client_cidr": "172.27.224.0/20",
+    "internal_dns_ip": "172.27.224.1",
+    "upstream_dns_servers": ["1.1.1.1", "1.0.0.1"]
   },
   "credential_bootstrap": {
     "material_version": 1,
