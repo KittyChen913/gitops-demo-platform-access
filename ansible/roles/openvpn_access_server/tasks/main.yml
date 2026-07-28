@@ -1,0 +1,154 @@
+---
+- name: Read Access Server configuration
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, ConfigQuery]
+  register: openvpn_config_query
+  changed_when: false
+  no_log: true
+
+- name: Parse Access Server configuration
+  ansible.builtin.set_fact:
+    openvpn_config: "{{ openvpn_config_query.stdout | from_json }}"
+  no_log: true
+
+- name: Define BASE-only split-tunnel settings
+  ansible.builtin.set_fact:
+    openvpn_base_settings:
+      vpn.client.routing.reroute_gw: "false"
+      vpn.client.routing.reroute_dns: custom
+      vpn.server.dhcp_option.dns.0: "{{ internal_dns_server_ip }}"
+      vpn.server.routing.gateway_access: "true"
+      vpn.server.routing.private_access: nat
+
+- name: Apply changed BASE Access Server settings
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --key
+      - "{{ item.key }}"
+      - --value
+      - "{{ item.value }}"
+      - ConfigPut
+  loop: "{{ openvpn_base_settings | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: (openvpn_config.get(item.key, '') | string) != (item.value | string)
+  notify: Apply Access Server changes
+
+- name: Read BASE group properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ item }}"
+      - UserPropGet
+  loop: "{{ openvpn_access_groups }}"
+  register: openvpn_group_queries
+  changed_when: false
+  no_log: true
+
+- name: Build BASE group property map
+  ansible.builtin.set_fact:
+    openvpn_group_properties: >-
+      {{ openvpn_group_properties | default({}) |
+         combine({item.item: ((item.stdout | from_json).get(item.item, {}))}) }}
+  loop: "{{ openvpn_group_queries.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Declare approved BASE groups
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - group_declare
+      - --value
+      - "true"
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: >-
+    openvpn_group_properties[item].get('group_declare', 'false') |
+    string | lower != 'true'
+  notify: Apply Access Server changes
+
+- name: Ensure approved identities are Access Server groups
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - type
+      - --value
+      - group
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: openvpn_group_properties[item].get('type', '') != 'group'
+  notify: Apply Access Server changes
+
+- name: Force BASE groups to ordinary non-admin role
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - prop_superuser
+      - --value
+      - "false"
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: >-
+    openvpn_group_properties[item].get('prop_superuser', '') |
+    string | lower != 'false'
+  notify: Apply Access Server changes
+
+- name: Disable auto-login for every BASE group
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - prop_autologin
+      - --value
+      - "false"
+      - UserPropPut
+  loop: "{{ openvpn_access_groups }}"
+  when: >-
+    openvpn_group_properties[item].get('prop_autologin', '') |
+    string | lower != 'false'
+  notify: Apply Access Server changes
+
+- name: Verify the desired Marketplace admin password
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/authcli
+      - --user
+      - "{{ openvpn_automation_username }}"
+      - --pass
+      - "{{ openvpn_admin_password }}"
+  register: openvpn_admin_auth_check
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Set the Marketplace admin password without logging it
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_automation_username }}"
+      - --new_pass
+      - "{{ openvpn_admin_password }}"
+      - SetLocalPassword
+  when: >-
+    openvpn_admin_auth_check.rc != 0 or
+    (openvpn_admin_auth_check.stdout |
+    regex_search('(?m)^\\s*status\\s*:\\s*SUCCEED\\s*$')) is none
+  changed_when: true
+  no_log: true
+  notify: Apply Access Server changes

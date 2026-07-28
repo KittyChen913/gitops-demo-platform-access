@@ -1,0 +1,7 @@
+{
+  "groups": [
+    "dev-ops",
+    "prod-ops",
+    "platform-ops"
+  ]
+}

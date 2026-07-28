@@ -1,0 +1,10 @@
+---
+- name: Validate dnsmasq configuration
+  ansible.builtin.command:
+    argv: [dnsmasq, --test]
+  changed_when: false
+
+- name: Restart dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: restarted

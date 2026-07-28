@@ -1,0 +1,9 @@
+---
+- name: Enable IPv4 forwarding idempotently
+  ansible.builtin.template:
+    src: 99-openvpn-forwarding.conf.j2
+    dest: /etc/sysctl.d/99-openvpn-forwarding.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply IPv4 forwarding

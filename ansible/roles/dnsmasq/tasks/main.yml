@@ -1,0 +1,25 @@
+---
+- name: Install dnsmasq and DNS diagnostics
+  ansible.builtin.apt:
+    name: [dnsmasq, dnsutils]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Atomically manage BASE dnsmasq configuration
+  ansible.builtin.template:
+    src: platform-access-base.conf.j2
+    dest: /etc/dnsmasq.d/platform-access-base.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "dnsmasq --test --conf-file=%s"
+  notify:
+    - Validate dnsmasq configuration
+    - Restart dnsmasq
+
+- name: Enable dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    enabled: true
+    state: started
