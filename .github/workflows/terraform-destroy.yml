@@ -25,7 +25,7 @@ jobs:
     outputs:
       approval_environment: ${{ steps.destroy_boundary.outputs.approval_environment }}
       base_plan_sha256: ${{ steps.create_plans.outputs.base_plan_sha256 }}
-      credential_plan_sha256: ${{ steps.create_plans.outputs.credential_plan_sha256 }}
+      credential_plan_sha256: ${{ steps.create_plans.outputs.credential_bootstrap_plan_sha256 }}
     steps:
       - uses: actions/checkout@v7
       - uses: hashicorp/setup-terraform@v4
