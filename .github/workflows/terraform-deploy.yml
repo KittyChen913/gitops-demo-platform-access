@@ -22,7 +22,7 @@ jobs:
       contents: read
     steps:
       - name: "Checkout complete history"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -64,7 +64,7 @@ jobs:
         working-directory: ${{ matrix.root }}
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: "Setup Terraform"
         uses: hashicorp/setup-terraform@v4

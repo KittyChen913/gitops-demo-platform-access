@@ -25,7 +25,7 @@ jobs:
       plan_sha256: ${{ steps.create_plan.outputs.plan_sha256 }}
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: "Setup Terraform"
         uses: hashicorp/setup-terraform@v4
@@ -129,7 +129,7 @@ jobs:
           rm -rf "${work}"
 
       - name: "Upload minimal saved-plan artifact"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: platform-access-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/platform-access-${{ inputs.deployment }}-apply-plan/terraform.tfplan
@@ -153,7 +153,7 @@ jobs:
       actions: read
     steps:
       - name: "Checkout"
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: "Setup Terraform"
         uses: hashicorp/setup-terraform@v4
@@ -161,7 +161,7 @@ jobs:
           terraform_version: "1.13.5"
 
       - name: "Download this run's saved plan"
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: platform-access-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/platform-access-${{ inputs.deployment }}-apply-plan
