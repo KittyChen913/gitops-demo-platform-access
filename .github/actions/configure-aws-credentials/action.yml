@@ -1,0 +1,33 @@
+name: "Configure AWS Credentials"
+description: "Configure short-lived AWS credentials through GitHub OIDC."
+
+inputs:
+  role-arn:
+    description: "Runtime role ARN composed by the caller from AWS_ACCOUNT_ID and the version-controlled role name."
+    required: true
+  aws-region:
+    description: "Version-controlled AWS Region loaded from config/shared.json."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Validate runtime role ARN"
+      shell: bash
+      env:
+        ROLE_ARN: ${{ inputs.role-arn }}
+      run: |
+        echo "::add-mask::${ROLE_ARN}"
+        if [[ ! "${ROLE_ARN}" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]+$ ]]; then
+          echo "::error::Runtime AWS role ARN is missing or invalid."
+          exit 1
+        fi
+
+    - name: "Configure AWS credentials via OIDC"
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.role-arn }}
+        role-session-name: platform-access-${{ github.run_id }}
+        aws-region: ${{ inputs.aws-region }}
+        mask-aws-account-id: true
+        unset-current-credentials: true

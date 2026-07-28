@@ -1,0 +1,109 @@
+name: "Platform Access reusable BASE configuration"
+
+on:
+  workflow_call:
+    secrets:
+      AWS_ACCOUNT_ID:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  configure:
+    name: "Configure and verify BASE"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: "Prepare AWS OIDC inputs"
+        id: aws_oidc_inputs
+        run: |
+          set -euo pipefail
+          aws_region="$(jq -r '.aws.region' config/shared.json)"
+          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
+          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
+          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Configure AWS credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+
+      - name: "Install pinned Ansible runtime"
+        run: pipx install ansible-core==2.17.7
+
+      - name: "Attest identity, configure BASE and always close runner access"
+        env:
+          TERRAFORM_ROOT: terraform/environments/shared/base
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          work="${RUNNER_TEMP}/platform-access-configure"
+          backend="${work}/backend.hcl"
+          baseline="${work}/firewall-baseline.json"
+          private_key="${work}/id_ed25519"
+          known_hosts="${work}/known_hosts"
+          inventory="${work}/inventory.yml"
+          mkdir -p "${work}"
+          chmod 700 "${work}"
+          cleanup() {
+            original_status=$?
+            set +e
+            cleanup_status=0
+            if [[ -n "${firewall_opened:-}" ]]; then
+              LINODE_TOKEN="${linode_token}" bash scripts/manage-runner-access.sh cleanup \
+                "${firewall_id}" "${instance_id}" "${runner_cidr}" "${baseline}" || cleanup_status=$?
+            fi
+            unset linode_token admin_password private_key_b64
+            rm -rf "${work}"
+            trap - EXIT
+            if (( cleanup_status != 0 )); then
+              echo "Runner /32 cleanup failed closed." >&2
+              exit "${cleanup_status}"
+            fi
+            exit "${original_status}"
+          }
+          trap cleanup EXIT
+
+          umask 077
+          jq -r --arg region "${AWS_REGION}" '.terraform_backend | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\($region)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' "${config}" > "${backend}"
+          terraform -chdir="${TERRAFORM_ROOT}" init -input=false -lockfile=readonly -backend-config="${backend}"
+          instance_id="$(terraform -chdir="${TERRAFORM_ROOT}" output -raw openvpn_instance_id)"
+          firewall_id="$(terraform -chdir="${TERRAFORM_ROOT}" output -raw openvpn_firewall_id)"
+          reserved_ip="$(terraform -chdir="${TERRAFORM_ROOT}" output -raw openvpn_reserved_ipv4)"
+          runner_ip="$(bash scripts/discover-runner-public-ip.sh)"
+          runner_cidr="${runner_ip}/32"
+          admin_port="$(jq -r '.linode.admin_port' "${config}")"
+
+          linode_token="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")" --with-decryption --query Parameter.Value --output text)"
+          admin_password="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_admin_password' "${config}")" --with-decryption --query Parameter.Value --output text)"
+          private_key_b64="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" --with-decryption --query Parameter.Value --output text)"
+          echo "::add-mask::${linode_token}"
+          echo "::add-mask::${admin_password}"
+          echo "::add-mask::${private_key_b64}"
+          printf '%s' "${private_key_b64}" | base64 --decode > "${private_key}"
+          chmod 600 "${private_key}"
+
+          firewall_opened=1
+          LINODE_TOKEN="${linode_token}" bash scripts/manage-runner-access.sh open "${firewall_id}" "${instance_id}" "${runner_cidr}" "${baseline}" "${admin_port}"
+          LINODE_TOKEN="${linode_token}" bash scripts/attest-host-key.sh \
+            "${instance_id}" "${firewall_id}" "${reserved_ip}" "${runner_cidr}" \
+            "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_host_key' "${config}")" \
+            "${known_hosts}" "${private_key}" "$(jq -r '.linode.automation_username' "${config}")" \
+            "$(jq -r '.linode.instance_label' "${config}")" "${admin_port}"
+
+          printf '%s\n' 'all:' '  children:' '    openvpn_servers:' '      hosts:' "        ${reserved_ip}:" \
+            "          ansible_user: $(jq -r '.linode.automation_username' "${config}")" \
+            "          ansible_ssh_private_key_file: ${private_key}" \
+            "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=${known_hosts}'" > "${inventory}"
+          OPENVPN_ADMIN_PASSWORD="${admin_password}" ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${inventory}" ansible/playbooks/configure-platform-access-base.yml
