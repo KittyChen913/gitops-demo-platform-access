@@ -1,0 +1,96 @@
+name: "Workflow and Terraform Quality"
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - ".github/**"
+      - "config/**"
+      - "scripts/**"
+      - "terraform/**"
+      - "ansible/**"
+      - "README.md"
+      - "docs/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/**"
+      - "config/**"
+      - "scripts/**"
+      - "terraform/**"
+      - "ansible/**"
+      - "README.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terraform-validate:
+    name: "Terraform Validate [${{ matrix.root }}]"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root:
+          - terraform/environments/shared/credential-bootstrap
+          - terraform/environments/shared/base
+    defaults:
+      run:
+        working-directory: ${{ matrix.root }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.13.5"
+
+      - name: "Terraform init without backend"
+        run: terraform init -backend=false -input=false -lockfile=readonly
+
+      - name: "Terraform format check"
+        run: terraform fmt -check -recursive -diff
+
+      - name: "Terraform validate"
+        run: terraform validate -no-color
+
+  repository-contract:
+    name: "Repository Contract"
+    runs-on: ubuntu-latest
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v6
+
+      - name: "Actionlint"
+        run: >-
+          docker run --rm
+          -v "${GITHUB_WORKSPACE}:/repo:ro"
+          --workdir /repo
+          rhysd/actionlint:1.7.12
+          -color
+
+      - name: "ShellCheck"
+        run: >-
+          docker run --rm
+          --entrypoint shellcheck
+          -v "${GITHUB_WORKSPACE}:/repo:ro"
+          --workdir /repo
+          koalaman/shellcheck:v0.10.0
+          scripts/*.sh
+
+      - name: "Validate YAML and Ansible playbook syntax"
+        run: >-
+          docker run --rm
+          -v "${GITHUB_WORKSPACE}:/repo:ro"
+          --workdir /repo
+          python:3.12.8-slim
+          sh -c
+          "pip install --disable-pip-version-check --no-cache-dir
+          ansible-core==2.17.7 yamllint==1.35.1
+          && yamllint -d relaxed --no-warnings .github/workflows ansible
+          && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
+          --syntax-check -i localhost,
+          ansible/playbooks/configure-platform-access-base.yml"
