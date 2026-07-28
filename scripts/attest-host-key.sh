@@ -16,6 +16,8 @@ ssh_user="${8:-}"
 expected_label="${9:-}"
 admin_port="${10:-}"
 ssh_ready_timeout_seconds=600
+control_plane_verify_attempts=6
+control_plane_verify_retry_seconds=5
 
 validate_ipv4() {
   local address="$1"
@@ -48,29 +50,71 @@ api_get() {
       -H 'Accept: application/json' "https://api.linode.com/v4$1"
 }
 
-instance="$(api_get "/linode/instances/${instance_id}")"
-ip_record="$(api_get "/networking/ips/${reserved_ip}")"
-firewall="$(api_get "/networking/firewalls/${firewall_id}")"
-devices="$(api_get "/networking/firewalls/${firewall_id}/devices")"
-rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
+instance_identity_matches=false
+reserved_ip_attachment_matches=false
+firewall_enabled=false
+firewall_attached=false
+temporary_rules_match=false
+control_plane_verified=false
 
-jq -e --arg label "${expected_label}" --arg ip "${reserved_ip}" '.status == "running" and .label == $label and (.ipv4 | index($ip) != null)' <<<"${instance}" >/dev/null
-jq -e --argjson instance_id "${instance_id}" '.reserved == true and .linode_id == $instance_id' <<<"${ip_record}" >/dev/null
-jq -e '.status == "enabled"' <<<"${firewall}" >/dev/null
-jq -e --argjson instance_id "${instance_id}" '.data | any(.entity.id == $instance_id and .entity.type == "linode")' <<<"${devices}" >/dev/null
-jq -e --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '
-  [.inbound[]? | select(
-    .action == "ACCEPT" and
-    .protocol == "TCP" and
-    ((.ports | gsub(" "; "") | split(",")) | any(. == "22" or . == $admin_port))
-  )] as $admin_rules |
-  ($admin_rules | length) == 2 and
-  all($admin_rules[];
-    .addresses.ipv4 == [$cidr] and
-    ((.addresses.ipv6 // []) | length) == 0 and
-    (.ports == "22" or .ports == $admin_port)
-  )
-' <<<"${rules}" >/dev/null
+for ((attempt = 1; attempt <= control_plane_verify_attempts; attempt++)); do
+  instance="$(api_get "/linode/instances/${instance_id}")"
+  ip_record="$(api_get "/networking/ips/${reserved_ip}")"
+  firewall="$(api_get "/networking/firewalls/${firewall_id}")"
+  devices="$(api_get "/networking/firewalls/${firewall_id}/devices")"
+  rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
+
+  instance_identity_matches="$(jq -r --arg label "${expected_label}" --arg ip "${reserved_ip}" \
+    '.status == "running" and .label == $label and any(.ipv4[]?; . == $ip)' \
+    <<<"${instance}")"
+  reserved_ip_attachment_matches="$(jq -r --arg ip "${reserved_ip}" \
+    --argjson instance_id "${instance_id}" \
+    '.address == $ip and .public == true and .linode_id == $instance_id' \
+    <<<"${ip_record}")"
+  firewall_enabled="$(jq -r '.status == "enabled"' <<<"${firewall}")"
+  firewall_attached="$(jq -r --argjson instance_id "${instance_id}" \
+    'any(.data[]?; .entity.id == $instance_id and .entity.type == "linode")' \
+    <<<"${devices}")"
+  temporary_rules_match="$(jq -r --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '
+    [.inbound[]? | select(
+      .action == "ACCEPT" and
+      (.protocol | ascii_upcase) == "TCP" and
+      ((.ports | gsub(" "; "") | split(",")) | any(. == "22" or . == $admin_port))
+    )] as $admin_rules |
+    ($admin_rules | length) == 2 and
+    all($admin_rules[];
+      .addresses.ipv4 == [$cidr] and
+      ((.addresses.ipv6 // []) | length) == 0 and
+      (.ports == "22" or .ports == $admin_port)
+    )
+  ' <<<"${rules}")"
+
+  if [[ "${instance_identity_matches}" == "true" &&
+        "${reserved_ip_attachment_matches}" == "true" &&
+        "${firewall_enabled}" == "true" &&
+        "${firewall_attached}" == "true" &&
+        "${temporary_rules_match}" == "true" ]]; then
+    control_plane_verified=true
+    break
+  fi
+
+  if ((attempt < control_plane_verify_attempts)); then
+    echo "Waiting for Linode control-plane attestation (${attempt}/${control_plane_verify_attempts})."
+    sleep "${control_plane_verify_retry_seconds}"
+  fi
+done
+
+if [[ "${control_plane_verified}" != "true" ]]; then
+  echo "::group::Linode control-plane attestation diagnostics"
+  echo "instance_identity_matches=${instance_identity_matches}"
+  echo "reserved_ip_attachment_matches=${reserved_ip_attachment_matches}"
+  echo "firewall_enabled=${firewall_enabled}"
+  echo "firewall_attached=${firewall_attached}"
+  echo "temporary_rules_match=${temporary_rules_match}"
+  echo "::endgroup::"
+  echo "Linode control-plane attestation failed." >&2
+  exit 1
+fi
 
 ssh_ready_deadline=$((SECONDS + ssh_ready_timeout_seconds))
 scanned_key=""

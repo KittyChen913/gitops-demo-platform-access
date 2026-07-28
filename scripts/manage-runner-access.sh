@@ -41,7 +41,7 @@ if [[ "${mode}" == open ]]; then
   rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
   jq -e '.status == "enabled"' <<<"${firewall}" >/dev/null
   jq -e --argjson instance_id "${instance_id}" '.data | any(.entity.id == $instance_id and .entity.type == "linode")' <<<"${devices}" >/dev/null
-  jq -e --arg admin_port "${admin_port}" '[.inbound[]? | select(.action == "ACCEPT" and .protocol == "TCP" and ((.ports | gsub(" "; "") | split(",")) | any(. == "22" or . == $admin_port)))] | length == 0' <<<"${rules}" >/dev/null || {
+  jq -e --arg admin_port "${admin_port}" '[.inbound[]? | select(.action == "ACCEPT" and (.protocol | ascii_upcase) == "TCP" and ((.ports | gsub(" "; "") | split(",")) | any(. == "22" or . == $admin_port)))] | length == 0' <<<"${rules}" >/dev/null || {
     echo "unexpected pre-existing SSH/Admin firewall access" >&2
     exit 1
   }
@@ -54,6 +54,40 @@ if [[ "${mode}" == open ]]; then
   ]' "${backup_file}" > "${updated}"
   api_put_rules "${updated}"
   rm -f "${updated}"
+
+  rules_ready_deadline=$((SECONDS + 120))
+  rules_ready=""
+  while ((SECONDS < rules_ready_deadline)); do
+    rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
+    if jq -e --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '
+      [.inbound[]? | select(
+        (.label == "temporary-runner-ssh" or .label == "temporary-runner-admin") and
+        .action == "ACCEPT" and
+        (.protocol | ascii_upcase) == "TCP"
+      )] as $temporary_rules |
+      ($temporary_rules | length) == 2 and
+      any($temporary_rules[];
+        .label == "temporary-runner-ssh" and
+        .ports == "22" and
+        .addresses.ipv4 == [$cidr] and
+        ((.addresses.ipv6 // []) | length) == 0
+      ) and
+      any($temporary_rules[];
+        .label == "temporary-runner-admin" and
+        .ports == $admin_port and
+        .addresses.ipv4 == [$cidr] and
+        ((.addresses.ipv6 // []) | length) == 0
+      )
+    ' <<<"${rules}" >/dev/null; then
+      rules_ready=1
+      break
+    fi
+    sleep 5
+  done
+  [[ -n "${rules_ready}" ]] || {
+    echo "temporary runner /32 Firewall rules did not become readable before timeout" >&2
+    exit 1
+  }
   echo "Temporary runner /32 access opened after identity checks."
 else
   [[ -f "${backup_file}" && ! -L "${backup_file}" ]] || { echo "firewall cleanup backup is missing" >&2; exit 1; }
