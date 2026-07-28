@@ -19,14 +19,14 @@ admin_port="${6:-}"
 api_get() {
   printf 'header = "Authorization: Bearer %s"\n' "${LINODE_TOKEN}" |
     curl --config - --fail --silent --show-error --proto '=https' --tlsv1.2 \
-      --connect-timeout 10 --max-time 30 --retry 3 --retry-all-errors \
+      --connect-timeout 10 --max-time 30 --retry 3 \
       -H 'Accept: application/json' "https://api.linode.com/v4$1"
 }
 
 api_put_rules() {
   printf 'header = "Authorization: Bearer %s"\n' "${LINODE_TOKEN}" |
     curl --config - --fail --silent --show-error --proto '=https' --tlsv1.2 \
-      --connect-timeout 10 --max-time 30 --retry 3 --retry-all-errors \
+      --connect-timeout 10 --max-time 30 --retry 3 \
       -X PUT -H 'Content-Type: application/json' --data-binary "@$1" \
       "https://api.linode.com/v4/networking/firewalls/${firewall_id}/rules" >/dev/null
 }
@@ -49,8 +49,8 @@ if [[ "${mode}" == open ]]; then
   jq '{inbound, inbound_policy, outbound, outbound_policy}' <<<"${rules}" > "${backup_file}"
   updated="${backup_file}.updated"
   jq --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '.inbound += [
-    {label:"temporary-runner-ssh",action:"ACCEPT",protocol:"TCP",ports:"22",ipv4:[$cidr]},
-    {label:"temporary-runner-admin",action:"ACCEPT",protocol:"TCP",ports:$admin_port,ipv4:[$cidr]}
+    {label:"temporary-runner-ssh",action:"ACCEPT",protocol:"TCP",ports:"22",addresses:{ipv4:[$cidr],ipv6:[]}},
+    {label:"temporary-runner-admin",action:"ACCEPT",protocol:"TCP",ports:$admin_port,addresses:{ipv4:[$cidr],ipv6:[]}}
   ]' "${backup_file}" > "${updated}"
   api_put_rules "${updated}"
   rm -f "${updated}"

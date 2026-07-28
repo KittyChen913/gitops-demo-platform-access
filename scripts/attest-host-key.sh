@@ -15,6 +15,7 @@ private_key_file="${7:-}"
 ssh_user="${8:-}"
 expected_label="${9:-}"
 admin_port="${10:-}"
+ssh_ready_timeout_seconds=600
 
 validate_ipv4() {
   local address="$1"
@@ -43,7 +44,7 @@ fi
 api_get() {
   printf 'header = "Authorization: Bearer %s"\n' "${LINODE_TOKEN}" |
     curl --config - --fail --silent --show-error --proto '=https' --tlsv1.2 \
-      --connect-timeout 10 --max-time 30 --retry 3 --retry-all-errors \
+      --connect-timeout 10 --max-time 30 --retry 3 \
       -H 'Accept: application/json' "https://api.linode.com/v4$1"
 }
 
@@ -65,14 +66,22 @@ jq -e --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '
   )] as $admin_rules |
   ($admin_rules | length) == 2 and
   all($admin_rules[];
-    .ipv4 == [$cidr] and
-    ((.ipv6 // []) | length) == 0 and
+    .addresses.ipv4 == [$cidr] and
+    ((.addresses.ipv6 // []) | length) == 0 and
     (.ports == "22" or .ports == $admin_port)
   )
 ' <<<"${rules}" >/dev/null
 
-scanned_key="$(ssh-keyscan -T 10 -t ed25519 "${reserved_ip}" 2>/dev/null | awk 'NF >= 3 {print $2 " " $3}' | sort -u)"
-[[ "${scanned_key}" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]] || { echo "host key scan was missing or ambiguous" >&2; exit 1; }
+ssh_ready_deadline=$((SECONDS + ssh_ready_timeout_seconds))
+scanned_key=""
+while ((SECONDS < ssh_ready_deadline)); do
+  scanned_key="$(ssh-keyscan -T 10 -t ed25519 "${reserved_ip}" 2>/dev/null | awk 'NF >= 3 {print $2 " " $3}' | sort -u)"
+  if [[ "${scanned_key}" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]; then
+    break
+  fi
+  sleep 10
+done
+[[ "${scanned_key}" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]] || { echo "host key scan did not become ready before timeout" >&2; exit 1; }
 
 existing_key="$(aws ssm get-parameter --name "${host_key_parameter}" --query Parameter.Value --output text 2>/dev/null || true)"
 if [[ -n "${existing_key}" && "${existing_key}" != "None" ]]; then
@@ -84,6 +93,12 @@ fi
 umask 077
 printf '%s %s\n' "${reserved_ip}" "${scanned_key}" > "${known_hosts_file}"
 chmod 600 "${known_hosts_file}" "${private_key_file}"
-ssh -i "${private_key_file}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-  -o "UserKnownHostsFile=${known_hosts_file}" -o ConnectTimeout=10 "${ssh_user}@${reserved_ip}" true
+while ! ssh -i "${private_key_file}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+  -o "UserKnownHostsFile=${known_hosts_file}" -o ConnectTimeout=10 "${ssh_user}@${reserved_ip}" true 2>/dev/null; do
+  if ((SECONDS >= ssh_ready_deadline)); then
+    echo "strict-pinned SSH did not become ready before timeout" >&2
+    exit 1
+  fi
+  sleep 10
+done
 echo "SSH host key verified after control-plane resource checks."
