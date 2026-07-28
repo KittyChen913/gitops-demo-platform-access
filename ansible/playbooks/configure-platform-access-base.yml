@@ -41,11 +41,18 @@
         path: /usr/local/openvpn_as/scripts/sacli
       register: openvpn_sacli
 
+    - name: Verify Marketplace Access Server authentication tool
+      ansible.builtin.stat:
+        path: /usr/local/openvpn_as/scripts/authcli
+      register: openvpn_authcli
+
     - name: Refuse non-Marketplace or invalid BASE contract
       ansible.builtin.assert:
         that:
           - openvpn_sacli.stat.exists
           - openvpn_sacli.stat.executable
+          - openvpn_authcli.stat.exists
+          - openvpn_authcli.stat.executable
           - openvpn_admin_password is string
           - openvpn_admin_password | length >= 24
           - openvpn_admin_username == 'openvpn'

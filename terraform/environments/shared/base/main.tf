@@ -13,9 +13,11 @@ check "credential_inputs" {
   assert {
     condition = (
       can(regex("^[^@[:space:]]+@[^@[:space:]]+\\.[^@[:space:]]+$", var.openvpn_contact_email)) &&
-      can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$", trimspace(var.ansible_ssh_public_key)))
+      can(regex("^ssh-ed25519 [A-Za-z0-9+/]+={0,3}( .*)?$", trimspace(var.ansible_ssh_public_key))) &&
+      local.deployment_config.linode.automation_username == "vpnadmin" &&
+      local.deployment_config.linode.openvpn_admin_username == "openvpn"
     )
-    error_message = "BASE requires the approved contact-email and credential-bootstrap SSH public-key contracts."
+    error_message = "BASE requires the approved contact-email, SSH public-key, sudo-user, and OpenVPN administrator contracts."
   }
 }
 

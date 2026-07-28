@@ -49,7 +49,9 @@ jobs:
             .terraform_backend.use_lockfile == true and
             .credential_bootstrap_backend.use_lockfile == true and
             .linode.marketplace_stackscript_id == 401719 and
-            .linode.image == "linode/ubuntu24.04"
+            .linode.image == "linode/ubuntu24.04" and
+            .linode.automation_username == "vpnadmin" and
+            .linode.openvpn_admin_username == "openvpn"
           ' config/shared.json >/dev/null
 
       - name: "Prepare AWS OIDC inputs"
