@@ -2,7 +2,7 @@
 - name: Configure Shared Platform Access BASE
   hosts: openvpn_servers
   become: true
-  gather_facts: true
+  gather_facts: false
 
   vars:
     platform_config: >-
@@ -29,6 +29,23 @@
       ansible.builtin.wait_for_connection:
         connect_timeout: 10
         timeout: 600
+
+    - name: Read the Marketplace-generated automation credentials
+      ansible.builtin.slurp:
+        src: "/home/{{ ansible_user }}/.credentials"
+      register: openvpn_marketplace_credentials_raw
+      become: false
+      no_log: true
+
+    - name: Unlock sudo for the automation account
+      ansible.builtin.set_fact:
+        ansible_become_pass: >-
+          {{ (openvpn_marketplace_credentials_raw.content | b64decode |
+             regex_search('(?m)^Sudo Password:\s*(\S+)\s*$', '\1'))[0] }}
+      no_log: true
+
+    - name: Gather Facts
+      ansible.builtin.setup:
 
     - name: Wait for Access Server web service
       ansible.builtin.wait_for:
