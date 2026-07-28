@@ -1,0 +1,41 @@
+name: "Close BASE access"
+description: "Close the temporary SSH/Admin lease for this runner and remove its working directory."
+
+inputs:
+  firewall-id:
+    description: "Linode Firewall ID attached to the BASE OpenVPN host."
+    required: true
+  instance-id:
+    description: "Linode instance ID for the BASE OpenVPN host."
+    required: true
+  work-dir:
+    description: "Runner-local working directory produced by open-base-access."
+    required: true
+  runner-cidr:
+    description: "This runner's public IPv4 /32, produced by open-base-access."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Close runner access"
+      if: always()
+      shell: bash
+      env:
+        WORK_DIR: ${{ inputs.work-dir }}
+        RUNNER_CIDR: ${{ inputs.runner-cidr }}
+        FIREWALL_ID: ${{ inputs.firewall-id }}
+        INSTANCE_ID: ${{ inputs.instance-id }}
+      run: |
+        set -euo pipefail
+        if [[ -f "${WORK_DIR}/firewall-opened.marker" ]]; then
+          LINODE_TOKEN="$(cat "${WORK_DIR}/linode_token")" bash scripts/manage-runner-access.sh cleanup \
+            "${FIREWALL_ID}" "${INSTANCE_ID}" "${RUNNER_CIDR}" "${WORK_DIR}/firewall-baseline.json"
+        fi
+
+    - name: "Remove working directory"
+      if: always()
+      shell: bash
+      env:
+        WORK_DIR: ${{ inputs.work-dir }}
+      run: rm -rf "${WORK_DIR}"

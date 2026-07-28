@@ -1,0 +1,145 @@
+name: "Open BASE access"
+description: "Open a temporary SSH/Admin lease for this runner against the BASE OpenVPN host and prepare an Ansible inventory."
+
+inputs:
+  instance-id:
+    description: "Linode instance ID for the BASE OpenVPN host."
+    required: true
+  firewall-id:
+    description: "Linode Firewall ID attached to the BASE OpenVPN host."
+    required: true
+  reserved-ip:
+    description: "Reserved public IPv4 of the BASE OpenVPN host."
+    required: true
+  admin-port:
+    description: "OpenVPN Access Server admin port."
+    required: true
+  aws-account-id:
+    description: "AWS account ID used to compose the OIDC role ARN."
+    required: true
+  fetch-admin-password:
+    description: "Whether to fetch the OpenVPN admin password from SSM."
+    required: false
+    default: "false"
+
+outputs:
+  work-dir:
+    description: "Runner-local working directory holding fetched secrets and the inventory."
+    value: ${{ steps.workdir.outputs.work_dir }}
+  inventory-path:
+    description: "Path to the generated Ansible inventory file."
+    value: ${{ steps.workdir.outputs.work_dir }}/inventory.yml
+  runner-cidr:
+    description: "This runner's public IPv4 /32, used to close access later."
+    value: ${{ steps.runner_ip.outputs.runner_cidr }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Prepare AWS OIDC inputs"
+      id: aws_oidc_inputs
+      shell: bash
+      run: |
+        set -euo pipefail
+        aws_region="$(jq -r '.aws.region' config/shared.json)"
+        role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
+        printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
+        printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
+
+    - name: "Configure AWS credentials via OIDC"
+      uses: ./.github/actions/configure-aws-credentials
+      with:
+        aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
+        role-arn: arn:aws:iam::${{ inputs.aws-account-id }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+
+    - name: "Install pinned Ansible runtime"
+      shell: bash
+      run: pipx install ansible-core==2.17.7
+
+    - name: "Prepare working directory"
+      id: workdir
+      shell: bash
+      run: |
+        set -euo pipefail
+        umask 077
+        work_dir="${RUNNER_TEMP}/platform-access-configure-${GITHUB_JOB}"
+        mkdir -p "${work_dir}"
+        chmod 700 "${work_dir}"
+        printf 'work_dir=%s\n' "${work_dir}" >> "${GITHUB_OUTPUT}"
+
+    - name: "Discover runner public IPv4"
+      id: runner_ip
+      shell: bash
+      run: |
+        set -euo pipefail
+        runner_ip="$(bash scripts/discover-runner-public-ip.sh)"
+        printf 'runner_cidr=%s/32\n' "${runner_ip}" >> "${GITHUB_OUTPUT}"
+
+    - name: "Fetch secrets from SSM"
+      shell: bash
+      env:
+        WORK_DIR: ${{ steps.workdir.outputs.work_dir }}
+        FETCH_ADMIN_PASSWORD: ${{ inputs.fetch-admin-password }}
+      run: |
+        set -euo pipefail
+        umask 077
+        config="${GITHUB_WORKSPACE}/config/shared.json"
+        linode_token="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")" --with-decryption --query Parameter.Value --output text)"
+        private_key_b64="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" --with-decryption --query Parameter.Value --output text)"
+        echo "::add-mask::${linode_token}"
+        echo "::add-mask::${private_key_b64}"
+        printf '%s' "${linode_token}" > "${WORK_DIR}/linode_token"
+        printf '%s' "${private_key_b64}" | base64 --decode > "${WORK_DIR}/id_ed25519"
+        chmod 600 "${WORK_DIR}/linode_token" "${WORK_DIR}/id_ed25519"
+        if [[ "${FETCH_ADMIN_PASSWORD}" == "true" ]]; then
+          admin_password="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_admin_password' "${config}")" --with-decryption --query Parameter.Value --output text)"
+          echo "::add-mask::${admin_password}"
+          printf '%s' "${admin_password}" > "${WORK_DIR}/admin_password"
+          chmod 600 "${WORK_DIR}/admin_password"
+        fi
+
+    - name: "Open temporary runner access"
+      shell: bash
+      env:
+        WORK_DIR: ${{ steps.workdir.outputs.work_dir }}
+        RUNNER_CIDR: ${{ steps.runner_ip.outputs.runner_cidr }}
+        FIREWALL_ID: ${{ inputs.firewall-id }}
+        INSTANCE_ID: ${{ inputs.instance-id }}
+        ADMIN_PORT: ${{ inputs.admin-port }}
+      run: |
+        set -euo pipefail
+        LINODE_TOKEN="$(cat "${WORK_DIR}/linode_token")" bash scripts/manage-runner-access.sh open \
+          "${FIREWALL_ID}" "${INSTANCE_ID}" "${RUNNER_CIDR}" "${WORK_DIR}/firewall-baseline.json" "${ADMIN_PORT}"
+        touch "${WORK_DIR}/firewall-opened.marker"
+
+    - name: "Attest SSH host key"
+      shell: bash
+      env:
+        WORK_DIR: ${{ steps.workdir.outputs.work_dir }}
+        RUNNER_CIDR: ${{ steps.runner_ip.outputs.runner_cidr }}
+        FIREWALL_ID: ${{ inputs.firewall-id }}
+        INSTANCE_ID: ${{ inputs.instance-id }}
+        RESERVED_IP: ${{ inputs.reserved-ip }}
+        ADMIN_PORT: ${{ inputs.admin-port }}
+      run: |
+        set -euo pipefail
+        config="${GITHUB_WORKSPACE}/config/shared.json"
+        LINODE_TOKEN="$(cat "${WORK_DIR}/linode_token")" bash scripts/attest-host-key.sh \
+          "${INSTANCE_ID}" "${FIREWALL_ID}" "${RESERVED_IP}" "${RUNNER_CIDR}" \
+          "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_host_key' "${config}")" \
+          "${WORK_DIR}/known_hosts" "${WORK_DIR}/id_ed25519" "$(jq -r '.linode.automation_username' "${config}")" \
+          "$(jq -r '.linode.instance_label' "${config}")" "${ADMIN_PORT}"
+
+    - name: "Build Ansible inventory"
+      shell: bash
+      env:
+        WORK_DIR: ${{ steps.workdir.outputs.work_dir }}
+        RESERVED_IP: ${{ inputs.reserved-ip }}
+      run: |
+        set -euo pipefail
+        config="${GITHUB_WORKSPACE}/config/shared.json"
+        printf '%s\n' 'all:' '  children:' '    openvpn_servers:' '      hosts:' "        ${RESERVED_IP}:" \
+          "          ansible_user: $(jq -r '.linode.automation_username' "${config}")" \
+          "          ansible_ssh_private_key_file: ${WORK_DIR}/id_ed25519" \
+          "          ansible_ssh_common_args: '-o StrictHostKeyChecking=yes -o UserKnownHostsFile=${WORK_DIR}/known_hosts'" \
+          > "${WORK_DIR}/inventory.yml"
