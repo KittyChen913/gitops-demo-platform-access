@@ -20,8 +20,8 @@
     openvpn_admin_port: "{{ platform_config.linode.admin_port }}"
     openvpn_port: "{{ platform_config.linode.openvpn_port }}"
     openvpn_protocol: "{{ platform_config.linode.openvpn_protocol }}"
-    openvpn_automation_username: >-
-      {{ platform_config.linode.automation_username }}
+    openvpn_admin_username: >-
+      {{ platform_config.linode.openvpn_admin_username }}
     openvpn_access_groups: "{{ access_contract.groups }}"
 
   pre_tasks:
@@ -48,6 +48,7 @@
           - openvpn_sacli.stat.executable
           - openvpn_admin_password is string
           - openvpn_admin_password | length >= 24
+          - openvpn_admin_username == 'openvpn'
           - internal_dns_server_ip == openvpn_server_tunnel_ip
           - >-
             openvpn_access_groups ==

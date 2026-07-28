@@ -123,12 +123,59 @@
     string | lower != 'false'
   notify: Apply Access Server changes
 
-- name: Verify the desired Marketplace admin password
+- name: Read OpenVPN administrator properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ openvpn_admin_username }}"
+      - UserPropGet
+  register: openvpn_admin_query
+  changed_when: false
+  no_log: true
+
+- name: Parse OpenVPN administrator properties
+  ansible.builtin.set_fact:
+    openvpn_admin_properties: >-
+      {{ (openvpn_admin_query.stdout | from_json)
+         .get(openvpn_admin_username, {}) }}
+    openvpn_admin_required_properties:
+      type: user_connect
+      user_auth_type: local
+      prop_superuser: "true"
+      prop_deny: "false"
+      prop_deny_web: "false"
+  no_log: true
+
+- name: Enforce the local OpenVPN administrator contract
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_admin_username }}"
+      - --key
+      - "{{ item.key }}"
+      - --value
+      - "{{ item.value }}"
+      - UserPropPut
+  loop: "{{ openvpn_admin_required_properties | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: >-
+    (openvpn_admin_properties.get(item.key, '') | string | lower) !=
+    (item.value | string | lower)
+  no_log: true
+  notify: Apply Access Server changes
+
+- name: Apply administrator identity changes before authentication
+  ansible.builtin.meta: flush_handlers
+
+- name: Check the desired OpenVPN administrator password
   ansible.builtin.command:
     argv:
       - /usr/local/openvpn_as/scripts/authcli
       - --user
-      - "{{ openvpn_automation_username }}"
+      - "{{ openvpn_admin_username }}"
       - --pass
       - "{{ openvpn_admin_password }}"
   register: openvpn_admin_auth_check
@@ -136,12 +183,12 @@
   failed_when: false
   no_log: true
 
-- name: Set the Marketplace admin password without logging it
+- name: Set the OpenVPN administrator password without logging it
   ansible.builtin.command:
     argv:
       - /usr/local/openvpn_as/scripts/sacli
       - --user
-      - "{{ openvpn_automation_username }}"
+      - "{{ openvpn_admin_username }}"
       - --new_pass
       - "{{ openvpn_admin_password }}"
       - SetLocalPassword
@@ -152,3 +199,22 @@
   changed_when: true
   no_log: true
   notify: Apply Access Server changes
+
+- name: Apply administrator password changes before verification
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify the OpenVPN administrator credentials
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/authcli
+      - --user
+      - "{{ openvpn_admin_username }}"
+      - --pass
+      - "{{ openvpn_admin_password }}"
+  register: openvpn_admin_final_auth_check
+  changed_when: false
+  failed_when: >-
+    openvpn_admin_final_auth_check.rc != 0 or
+    (openvpn_admin_final_auth_check.stdout |
+    regex_search('(?m)^\\s*status\\s*:\\s*SUCCEED\\s*$')) is none
+  no_log: true

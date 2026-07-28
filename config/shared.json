@@ -31,6 +31,7 @@
     "image": "linode/ubuntu24.04",
     "marketplace_stackscript_id": 401719,
     "automation_username": "vpnadmin",
+    "openvpn_admin_username": "openvpn",
     "openvpn_port": 1194,
     "openvpn_protocol": "udp",
     "admin_port": 943
