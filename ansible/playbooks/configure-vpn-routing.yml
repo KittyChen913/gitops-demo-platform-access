@@ -9,6 +9,7 @@
 
   pre_tasks:
     - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+      tags: always
 
   roles:
     - vpn_routing

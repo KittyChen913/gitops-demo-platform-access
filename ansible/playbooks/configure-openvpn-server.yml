@@ -9,6 +9,7 @@
 
   pre_tasks:
     - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+      tags: always
 
   roles:
     - role: openvpn_access_server

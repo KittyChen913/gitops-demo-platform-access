@@ -9,6 +9,7 @@
 
   pre_tasks:
     - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+      tags: always
 
   tasks:
     - ansible.builtin.import_tasks: tasks/base-postverify.yml
