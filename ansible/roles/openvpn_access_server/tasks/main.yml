@@ -170,19 +170,6 @@
 - name: Apply administrator identity changes before authentication
   ansible.builtin.meta: flush_handlers
 
-- name: Check the desired OpenVPN administrator password
-  ansible.builtin.command:
-    argv:
-      - /usr/local/openvpn_as/scripts/authcli
-      - --user
-      - "{{ openvpn_admin_username }}"
-      - --pass
-      - "{{ openvpn_admin_password }}"
-  register: openvpn_admin_auth_check
-  changed_when: false
-  failed_when: false
-  no_log: true
-
 - name: Set the OpenVPN administrator password without logging it
   ansible.builtin.command:
     argv:
@@ -192,10 +179,6 @@
       - --new_pass
       - "{{ openvpn_admin_password }}"
       - SetLocalPassword
-  when: >-
-    openvpn_admin_auth_check.rc != 0 or
-    (openvpn_admin_auth_check.stdout |
-    regex_search('(?m)^\\s*status\\s*:\\s*SUCCEED\\s*$')) is none
   changed_when: true
   no_log: true
   notify: Apply Access Server changes
@@ -203,18 +186,56 @@
 - name: Apply administrator password changes before verification
   ansible.builtin.meta: flush_handlers
 
-- name: Verify the OpenVPN administrator credentials
-  ansible.builtin.command:
-    argv:
-      - /usr/local/openvpn_as/scripts/authcli
-      - --user
-      - "{{ openvpn_admin_username }}"
-      - --pass
-      - "{{ openvpn_admin_password }}"
-  register: openvpn_admin_final_auth_check
+- name: Verify the OpenVPN Admin Web UI credentials
+  ansible.builtin.uri:
+    url: >-
+      https://127.0.0.1:{{ openvpn_admin_port
+      }}/api/auth/login/userpassword
+    method: POST
+    headers:
+      Accept: application/json
+    body_format: json
+    body:
+      request_admin: true
+      username: "{{ openvpn_admin_username }}"
+      password: "{{ openvpn_admin_password }}"
+    return_content: true
+    status_code: 200
+    timeout: 30
+    use_proxy: false
+    validate_certs: false
+  register: openvpn_admin_web_login
   changed_when: false
   failed_when: >-
-    openvpn_admin_final_auth_check.rc != 0 or
-    (openvpn_admin_final_auth_check.stdout |
-    regex_search('(?m)^\\s*status\\s*:\\s*SUCCEED\\s*$')) is none
+    openvpn_admin_web_login.status != 200 or
+    ((openvpn_admin_web_login.json | default({}))
+    .get('auth_token', '') | length) == 0 or
+    (((openvpn_admin_web_login.json | default({}))
+    .get('user_properties', {})).get('user_type', '')) != 'admin'
+  no_log: true
+
+- name: Verify the OpenVPN Client Web UI credentials
+  ansible.builtin.uri:
+    url: >-
+      https://127.0.0.1:{{ openvpn_admin_port
+      }}/api/auth/login/userpassword
+    method: POST
+    headers:
+      Accept: application/json
+    body_format: json
+    body:
+      request_admin: false
+      username: "{{ openvpn_admin_username }}"
+      password: "{{ openvpn_admin_password }}"
+    return_content: true
+    status_code: 200
+    timeout: 30
+    use_proxy: false
+    validate_certs: false
+  register: openvpn_client_web_login
+  changed_when: false
+  failed_when: >-
+    openvpn_client_web_login.status != 200 or
+    ((openvpn_client_web_login.json | default({}))
+    .get('auth_token', '') | length) == 0
   no_log: true
