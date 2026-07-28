@@ -5,6 +5,7 @@
   register: ufw_status
   changed_when: false
   failed_when: false
+  tags: always
 
 - name: Fail closed instead of installing a second firewall backend
   ansible.builtin.assert:
@@ -14,6 +15,7 @@
     fail_msg: >-
       The Marketplace host must already use active UFW; no fallback firewall
       is installed.
+  tags: always
 
 - name: Remove Marketplace public web exceptions not owned by BASE
   ansible.builtin.command:
@@ -23,6 +25,7 @@
   changed_when: ufw_remove_public_web.rc == 0
   failed_when: false
   notify: Reload UFW
+  tags: remove-legacy-rules
 
 - name: Allow SSH only behind the temporary Linode Firewall runner lease
   ansible.builtin.command:
@@ -30,6 +33,7 @@
   register: ufw_ssh
   changed_when: "'Skipping adding existing rule' not in ufw_ssh.stdout"
   notify: Reload UFW
+  tags: apply-firewall-rules
 
 - name: Allow Admin UI only behind the temporary Linode Firewall runner lease
   ansible.builtin.command:
@@ -37,6 +41,7 @@
   register: ufw_admin
   changed_when: "'Skipping adding existing rule' not in ufw_admin.stdout"
   notify: Reload UFW
+  tags: apply-firewall-rules
 
 - name: Allow the public OpenVPN listener
   ansible.builtin.command:
@@ -44,6 +49,7 @@
   register: ufw_openvpn
   changed_when: "'Skipping adding existing rule' not in ufw_openvpn.stdout"
   notify: Reload UFW
+  tags: apply-firewall-rules
 
 - name: Allow VPN clients to query tunnel DNS
   ansible.builtin.command:
@@ -65,6 +71,7 @@
   register: ufw_dns_allow
   changed_when: "'Skipping adding existing rule' not in ufw_dns_allow.stdout"
   notify: Reload UFW
+  tags: apply-firewall-rules
 
 - name: Remove any generic public DNS allow rule
   ansible.builtin.command:
@@ -74,6 +81,7 @@
   changed_when: ufw_dns_public_allow_removal.rc == 0
   failed_when: false
   notify: Reload UFW
+  tags: remove-legacy-rules
 
 - name: Explicitly deny DNS on the public interface
   ansible.builtin.command:
@@ -93,3 +101,4 @@
   register: ufw_dns_deny
   changed_when: "'Skipping adding existing rule' not in ufw_dns_deny.stdout"
   notify: Reload UFW
+  tags: apply-firewall-rules
