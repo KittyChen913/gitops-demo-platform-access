@@ -1,0 +1,15 @@
+---
+- name: Install and configure the OpenVPN Access Server
+  hosts: openvpn_servers
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - vars/base.yml
+
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+
+  roles:
+    - role: openvpn_access_server
+      tasks_from: install.yml

@@ -1,0 +1,14 @@
+---
+- name: Verify Platform Access BASE configuration
+  hosts: openvpn_servers
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - vars/base.yml
+
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+
+  tasks:
+    - ansible.builtin.import_tasks: tasks/base-postverify.yml
