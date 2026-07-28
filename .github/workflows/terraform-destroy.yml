@@ -1,0 +1,282 @@
+name: "Platform Access manual destroy"
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Destroy BASE only, or BASE and credential bootstrap"
+        required: true
+        type: choice
+        options:
+          - base
+          - all
+      confirmation:
+        description: "DESTROY-SHARED-BASE or DESTROY-SHARED-ALL"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "platform-access-mutation"
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: "Plan and verify destroy"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      approval_environment: ${{ steps.destroy_boundary.outputs.approval_environment }}
+      base_plan_sha256: ${{ steps.create_plans.outputs.base_plan_sha256 }}
+      credential_plan_sha256: ${{ steps.create_plans.outputs.credential_plan_sha256 }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: "Validate destroy boundary"
+        id: destroy_boundary
+        env:
+          TARGET: ${{ inputs.target }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          GIT_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          test "${GIT_REF}" = "$(jq -r '.repository.operations_ref' config/shared.json)"
+          case "${TARGET}" in
+            base) test "${CONFIRMATION}" = "DESTROY-SHARED-BASE" ;;
+            all) test "${CONFIRMATION}" = "DESTROY-SHARED-ALL" ;;
+            *) exit 1 ;;
+          esac
+          approval_environment="$(jq -r '.github.destroy_approval_environment' config/shared.json)"
+          test -n "${approval_environment}"
+          printf 'approval_environment=%s\n' "${approval_environment}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Validate version-controlled destroy contract"
+        run: |
+          set -euo pipefail
+          jq -e '
+            .schema_version == 2 and
+            .repository.operations_ref == "refs/heads/master" and
+            .repository.deployment_tag_prefix == "v" and
+            (.github.destroy_approval_environment | type == "string" and length > 0) and
+            (.aws.destroy_oidc_role_name | type == "string" and length > 0) and
+            .terraform_backend.use_lockfile == true and
+            .credential_bootstrap_backend.use_lockfile == true
+          ' config/shared.json >/dev/null
+
+      - name: "Prepare AWS OIDC inputs"
+        id: aws_oidc_inputs
+        run: |
+          set -euo pipefail
+          aws_region="$(jq -r '.aws.region' config/shared.json)"
+          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
+          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
+          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Configure AWS plan credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+
+      - name: "Create and verify destroy plans"
+        id: create_plans
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          bundle="${RUNNER_TEMP}/platform-access-destroy-plans"
+          work="${RUNNER_TEMP}/platform-access-destroy-work"
+          trap 'unset linode_token contact_email ssh_public_key 2>/dev/null || true; rm -rf "${bundle}" "${work}"' EXIT
+          mkdir -p "${bundle}" "${work}"
+          umask 077
+
+          create_destroy_plan() {
+            local deployment="$1"
+            local root="$2"
+            local backend_selector="$3"
+            local deployment_bundle="${bundle}/${deployment}"
+            local backend_file="${work}/${deployment}-backend.hcl"
+            local plan_file="${deployment_bundle}/terraform.tfplan"
+            local plan_json="${work}/${deployment}.tfplan.json"
+            local plan_sha256
+            mkdir -p "${deployment_bundle}"
+            jq -r --arg key "${backend_selector}" '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' "${config}" > "${backend_file}"
+            terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+
+            if [[ "${deployment}" == "base" ]]; then
+              linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
+              contact_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_contact_email' "${config}")"
+              public_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"
+              linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
+              contact_email="$(aws ssm get-parameter --name "${contact_path}" --with-decryption --query Parameter.Value --output text)"
+              ssh_public_key="$(aws ssm get-parameter --name "${public_key_path}" --query Parameter.Value --output text)"
+              echo "::add-mask::${linode_token}"
+              echo "::add-mask::${contact_email}"
+              LINODE_TOKEN="${linode_token}" TF_VAR_openvpn_contact_email="${contact_email}" TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
+                terraform -chdir="${root}" plan -destroy -input=false -refresh=true -lock=false -out="${plan_file}"
+              unset linode_token contact_email ssh_public_key
+            else
+              terraform -chdir="${root}" plan -destroy -input=false -refresh=true -lock=false -out="${plan_file}"
+            fi
+
+            terraform -chdir="${root}" show -json "${plan_file}" > "${plan_json}"
+            bash scripts/verify-plan-policy.sh "${plan_json}" "${deployment}" destroy
+            plan_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
+            [[ "${plan_sha256}" =~ ^[0-9a-f]{64}$ ]]
+            printf '%s_plan_sha256=%s\n' "${deployment//-/_}" "${plan_sha256}" >> "${GITHUB_OUTPUT}"
+            rm -f "${backend_file}" "${plan_json}"
+          }
+
+          create_destroy_plan base terraform/environments/shared/base terraform_backend
+          if [[ "${TARGET}" == "all" ]]; then
+            create_destroy_plan credential-bootstrap terraform/environments/shared/credential-bootstrap credential_bootstrap_backend
+          fi
+
+          trap - EXIT
+          unset linode_token contact_email ssh_public_key 2>/dev/null || true
+          rm -rf "${work}"
+
+      - name: "Upload this run's destroy plans"
+        uses: actions/upload-artifact@v4
+        with:
+          name: platform-access-destroy-plans-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-access-destroy-plans/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: "Remove runner plan bundle"
+        if: always()
+        run: rm -rf "${RUNNER_TEMP}/platform-access-destroy-plans"
+
+  approval:
+    name: "Approve destroy"
+    needs: plan
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ needs.plan.outputs.approval_environment }}
+    steps:
+      - name: "Record protected-environment approval"
+        run: echo "Destroy plans passed the protected environment gate."
+
+  destroy:
+    name: "Apply verified destroy plans"
+    needs:
+      - plan
+      - approval
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: "Download this run's destroy plans"
+        uses: actions/download-artifact@v5
+        with:
+          name: platform-access-destroy-plans-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-access-destroy-plans
+
+      - name: "Verify saved plan checksums before credentials"
+        env:
+          TARGET: ${{ inputs.target }}
+          BASE_PLAN_SHA256: ${{ needs.plan.outputs.base_plan_sha256 }}
+          CREDENTIAL_PLAN_SHA256: ${{ needs.plan.outputs.credential_plan_sha256 }}
+        run: |
+          set -euo pipefail
+          bundle="${RUNNER_TEMP}/platform-access-destroy-plans"
+          verify_bundle() {
+            local deployment="$1"
+            local expected_sha256="$2"
+            local deployment_bundle="${bundle}/${deployment}"
+            local plan_file="${deployment_bundle}/terraform.tfplan"
+            local actual_sha256
+            test -f "${plan_file}"
+            test ! -L "${plan_file}"
+            [[ "${expected_sha256}" =~ ^[0-9a-f]{64}$ ]]
+            actual_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
+            test "${actual_sha256}" = "${expected_sha256}"
+          }
+          verify_bundle base "${BASE_PLAN_SHA256}"
+          if [[ "${TARGET}" == "all" ]]; then
+            verify_bundle credential-bootstrap "${CREDENTIAL_PLAN_SHA256}"
+          else
+            test ! -e "${bundle}/credential-bootstrap"
+            test -z "${CREDENTIAL_PLAN_SHA256}"
+          fi
+
+      - name: "Prepare destroy AWS OIDC inputs"
+        id: aws_oidc_inputs
+        run: |
+          set -euo pipefail
+          aws_region="$(jq -r '.aws.region' config/shared.json)"
+          role_name="$(jq -r '.aws.destroy_oidc_role_name' config/shared.json)"
+          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
+          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Configure AWS destroy credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
+          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+
+      - name: "Apply verified destroy plans in dependency order"
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          bundle="${RUNNER_TEMP}/platform-access-destroy-plans"
+          work="${RUNNER_TEMP}/platform-access-destroy-work"
+          trap 'unset linode_token 2>/dev/null || true; rm -rf "${bundle}" "${work}"' EXIT
+          mkdir -p "${work}"
+          umask 077
+
+          prepare_destroy_plan() {
+            local deployment="$1"
+            local root="$2"
+            local backend_selector="$3"
+            local backend_file="${work}/${deployment}-backend.hcl"
+            jq -r --arg key "${backend_selector}" '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' "${config}" > "${backend_file}"
+            terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+          }
+
+          base_root="terraform/environments/shared/base"
+          prepare_destroy_plan base "${base_root}" terraform_backend
+          linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
+          linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
+          echo "::add-mask::${linode_token}"
+          LINODE_TOKEN="${linode_token}" terraform -chdir="${base_root}" apply -input=false "${bundle}/base/terraform.tfplan"
+          unset linode_token
+
+          if [[ -n "$(terraform -chdir="${base_root}" state list)" ]]; then
+            echo "BASE state is not empty after applying its destroy plan; credentials will not be destroyed." >&2
+            exit 1
+          fi
+
+          host_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_host_key' "${config}")"
+          host_key_error="${work}/host-key-cleanup.error"
+          if aws ssm get-parameter --name "${host_key_path}" --query Parameter.Name --output text >/dev/null 2>"${host_key_error}"; then
+            aws ssm delete-parameter --name "${host_key_path}" >/dev/null
+          elif ! grep -q 'ParameterNotFound' "${host_key_error}"; then
+            echo "Unable to verify or remove the retired OpenVPN host-key pin." >&2
+            exit 1
+          fi
+          rm -f "${host_key_error}"
+
+          if [[ "${TARGET}" == "all" ]]; then
+            credential_root="terraform/environments/shared/credential-bootstrap"
+            prepare_destroy_plan credential-bootstrap "${credential_root}" credential_bootstrap_backend
+            terraform -chdir="${credential_root}" apply -input=false "${bundle}/credential-bootstrap/terraform.tfplan"
+          fi
