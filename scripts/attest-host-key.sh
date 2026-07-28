@@ -119,7 +119,11 @@ fi
 ssh_ready_deadline=$((SECONDS + ssh_ready_timeout_seconds))
 scanned_key=""
 while ((SECONDS < ssh_ready_deadline)); do
-  scanned_key="$(ssh-keyscan -T 10 -t ed25519 "${reserved_ip}" 2>/dev/null | awk 'NF >= 3 {print $2 " " $3}' | sort -u)"
+  if ! scanned_key="$(ssh-keyscan -T 10 -t ed25519 "${reserved_ip}" 2>/dev/null |
+    awk 'NF >= 3 {print $2 " " $3}' |
+    sort -u)"; then
+    scanned_key=""
+  fi
   if [[ "${scanned_key}" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]; then
     break
   fi
