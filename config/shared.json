@@ -1,0 +1,15 @@
+{
+  "schema_version": 2,
+  "aws": {
+    "region": "ap-southeast-1",
+    "ssm_parameter_paths": {
+      "openvpn_admin_password": "/gitops/platform-access/openvpn/ansible/OPENVPN_ADMIN_PASSWORD",
+      "openvpn_ssh_private_key_b64": "/gitops/platform-access/openvpn/ansible/OPENVPN_SSH_PRIVATE_KEY_B64",
+      "openvpn_ssh_public_key": "/gitops/platform-access/openvpn/ansible/OPENVPN_SSH_PUBLIC_KEY"
+    }
+  },
+  "credential_bootstrap": {
+    "material_version": 1,
+    "admin_password_length": 32
+  }
+}
