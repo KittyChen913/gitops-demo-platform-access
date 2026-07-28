@@ -5,6 +5,20 @@
     timeout: 600
   become: false
 
+- name: Wait for Access Server web service
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ openvpn_admin_port }}"
+    timeout: 900
+  become: false
+
+- name: Wait for the Marketplace-generated automation credentials file
+  ansible.builtin.wait_for:
+    path: "/home/{{ ansible_user }}/.credentials"
+    state: present
+    timeout: 600
+  become: false
+
 - name: Read the Marketplace-generated automation credentials
   ansible.builtin.slurp:
     src: "/home/{{ ansible_user }}/.credentials"
@@ -21,12 +35,6 @@
 
 - name: Gather Facts
   ansible.builtin.setup:
-
-- name: Wait for Access Server web service
-  ansible.builtin.wait_for:
-    host: 127.0.0.1
-    port: "{{ openvpn_admin_port }}"
-    timeout: 900
 
 - name: Verify Marketplace Access Server tools
   ansible.builtin.stat:
