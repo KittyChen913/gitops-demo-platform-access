@@ -140,22 +140,12 @@ jobs:
         if: always()
         run: rm -rf "${RUNNER_TEMP}/platform-access-destroy-plans"
 
-  approval:
-    name: "Approve destroy"
+  destroy:
+    name: "Apply verified destroy plans"
     needs: plan
     runs-on: ubuntu-latest
     environment:
       name: ${{ needs.plan.outputs.approval_environment }}
-    steps:
-      - name: "Record protected-environment approval"
-        run: echo "Destroy plans passed the protected environment gate."
-
-  destroy:
-    name: "Apply verified destroy plans"
-    needs:
-      - plan
-      - approval
-    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
