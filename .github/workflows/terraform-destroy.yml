@@ -70,15 +70,14 @@ jobs:
 
           create_destroy_plan() {
             local deployment="$1"
-            local root="$2"
-            local backend_selector="$3"
+            local root
             local deployment_bundle="${bundle}/${deployment}"
             local backend_file="${work}/${deployment}-backend.hcl"
             local plan_file="${deployment_bundle}/terraform.tfplan"
             local plan_json="${work}/${deployment}.tfplan.json"
             local plan_sha256
             mkdir -p "${deployment_bundle}"
-            jq -r --arg key "${backend_selector}" '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' "${config}" > "${backend_file}"
+            root="$(bash scripts/resolve-terraform-backend.sh "${deployment}" "${backend_file}")"
             terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
 
             if [[ "${deployment}" == "base" ]]; then
@@ -105,8 +104,8 @@ jobs:
             rm -f "${backend_file}" "${plan_json}"
           }
 
-          create_destroy_plan base terraform/environments/shared/base terraform_backend
-          create_destroy_plan credential-bootstrap terraform/environments/shared/credential-bootstrap credential_bootstrap_backend
+          create_destroy_plan base
+          create_destroy_plan credential-bootstrap
 
           trap - EXIT
           unset linode_token contact_email ssh_public_key 2>/dev/null || true
@@ -183,15 +182,14 @@ jobs:
 
           prepare_destroy_plan() {
             local deployment="$1"
-            local root="$2"
-            local backend_selector="$3"
             local backend_file="${work}/${deployment}-backend.hcl"
-            jq -r --arg key "${backend_selector}" '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' "${config}" > "${backend_file}"
-            terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+            local root
+            root="$(bash scripts/resolve-terraform-backend.sh "${deployment}" "${backend_file}")"
+            terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}" >&2
+            printf '%s' "${root}"
           }
 
-          base_root="terraform/environments/shared/base"
-          prepare_destroy_plan base "${base_root}" terraform_backend
+          base_root="$(prepare_destroy_plan base)"
           linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
           linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
           echo "::add-mask::${linode_token}"
@@ -213,6 +211,5 @@ jobs:
           fi
           rm -f "${host_key_error}"
 
-          credential_root="terraform/environments/shared/credential-bootstrap"
-          prepare_destroy_plan credential-bootstrap "${credential_root}" credential_bootstrap_backend
+          credential_root="$(prepare_destroy_plan credential-bootstrap)"
           terraform -chdir="${credential_root}" apply -input=false "${bundle}/credential-bootstrap/terraform.tfplan"

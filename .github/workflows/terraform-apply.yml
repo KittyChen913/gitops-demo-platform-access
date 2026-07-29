@@ -64,26 +64,11 @@ jobs:
           DEPLOYMENT: ${{ inputs.deployment }}
         run: |
           set -euo pipefail
-          config="${GITHUB_WORKSPACE}/config/shared.json"
           bundle="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan"
           work="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-plan-work"
-          case "${DEPLOYMENT}" in
-            credential-bootstrap)
-              root="terraform/environments/shared/credential-bootstrap"
-              backend_selector="credential_bootstrap_backend"
-              ;;
-            base)
-              root="terraform/environments/shared/base"
-              backend_selector="terraform_backend"
-              ;;
-          esac
-
           mkdir -p "${bundle}" "${work}"
-          umask 077
           backend_file="${work}/${DEPLOYMENT}-backend.hcl"
-          jq -r --arg key "${backend_selector}" \
-            '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' \
-            "${config}" > "${backend_file}"
+          root="$(bash scripts/resolve-terraform-backend.sh "${DEPLOYMENT}" "${backend_file}")"
           terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
 
           {
@@ -191,26 +176,11 @@ jobs:
           DEPLOYMENT: ${{ inputs.deployment }}
         run: |
           set -euo pipefail
-          config="${GITHUB_WORKSPACE}/config/shared.json"
           bundle="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan"
           work="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-work"
-          case "${DEPLOYMENT}" in
-            credential-bootstrap)
-              root="terraform/environments/shared/credential-bootstrap"
-              backend_selector="credential_bootstrap_backend"
-              ;;
-            base)
-              root="terraform/environments/shared/base"
-              backend_selector="terraform_backend"
-              ;;
-          esac
-
           mkdir -p "${work}"
-          umask 077
           backend_file="${work}/${DEPLOYMENT}-backend.hcl"
-          jq -r --arg key "${backend_selector}" \
-            '.[$key] | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\(.region // $ENV.AWS_REGION)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' \
-            "${config}" > "${backend_file}"
+          root="$(bash scripts/resolve-terraform-backend.sh "${DEPLOYMENT}" "${backend_file}")"
           terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
 
           {
