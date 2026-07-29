@@ -54,8 +54,8 @@ jobs:
             printf 'admin_port=%s\n' "$(jq -r '.linode.admin_port' config/shared.json)"
           } >> "${GITHUB_OUTPUT}"
 
-  configure-vpn-routing:
-    name: "Configure BASE: VPN routing"
+  configure-base:
+    name: "Configure BASE"
     needs: resolve-base
     runs-on: ubuntu-latest
     permissions:
@@ -74,6 +74,7 @@ jobs:
           reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
           admin-port: ${{ needs.resolve-base.outputs.admin_port }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          fetch-admin-password: "true"
 
       - name: "Configure IPv4 forwarding"
         env:
@@ -82,36 +83,6 @@ jobs:
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-vpn-routing.yml
-
-      - name: "Close BASE access"
-        if: always()
-        uses: ./.github/actions/close-base-access
-        with:
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          work-dir: ${{ steps.open.outputs.work-dir }}
-          runner-cidr: ${{ steps.open.outputs.runner-cidr }}
-
-  configure-dnsmasq:
-    name: "Configure BASE: dnsmasq"
-    needs: [resolve-base, configure-vpn-routing]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-
-      - name: "Open BASE access"
-        id: open
-        uses: ./.github/actions/open-base-access
-        with:
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
-          admin-port: ${{ needs.resolve-base.outputs.admin_port }}
-          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
 
       - name: "Install dnsmasq package"
         env:
@@ -128,36 +99,6 @@ jobs:
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-dnsmasq.yml --tags configure
-
-      - name: "Close BASE access"
-        if: always()
-        uses: ./.github/actions/close-base-access
-        with:
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          work-dir: ${{ steps.open.outputs.work-dir }}
-          runner-cidr: ${{ steps.open.outputs.runner-cidr }}
-
-  configure-openvpn-server:
-    name: "Configure BASE: Install & configure OpenVPN"
-    needs: [resolve-base, configure-dnsmasq]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-
-      - name: "Open BASE access"
-        id: open
-        uses: ./.github/actions/open-base-access
-        with:
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
-          admin-port: ${{ needs.resolve-base.outputs.admin_port }}
-          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
 
       - name: "Apply Access Server settings"
         env:
@@ -183,37 +124,6 @@ jobs:
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-openvpn-server.yml --tags admin-identity
 
-      - name: "Close BASE access"
-        if: always()
-        uses: ./.github/actions/close-base-access
-        with:
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          work-dir: ${{ steps.open.outputs.work-dir }}
-          runner-cidr: ${{ steps.open.outputs.runner-cidr }}
-
-  reset-openvpn-admin-password:
-    name: "Configure BASE: Reset OpenVPN admin password"
-    needs: [resolve-base, configure-openvpn-server]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-
-      - name: "Open BASE access"
-        id: open
-        uses: ./.github/actions/open-base-access
-        with:
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
-          admin-port: ${{ needs.resolve-base.outputs.admin_port }}
-          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-          fetch-admin-password: "true"
-
       - name: "Set OpenVPN admin password"
         env:
           INVENTORY: ${{ steps.open.outputs.inventory-path }}
@@ -232,36 +142,6 @@ jobs:
           OPENVPN_ADMIN_PASSWORD="$(cat "${WORK_DIR}/admin_password")" ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/reset-openvpn-admin-password.yml --tags verify-login
 
-      - name: "Close BASE access"
-        if: always()
-        uses: ./.github/actions/close-base-access
-        with:
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          work-dir: ${{ steps.open.outputs.work-dir }}
-          runner-cidr: ${{ steps.open.outputs.runner-cidr }}
-
-  configure-host-firewall:
-    name: "Configure BASE: Host firewall"
-    needs: [resolve-base, reset-openvpn-admin-password]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-
-      - name: "Open BASE access"
-        id: open
-        uses: ./.github/actions/open-base-access
-        with:
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
-          admin-port: ${{ needs.resolve-base.outputs.admin_port }}
-          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-
       - name: "Remove legacy firewall rules"
         env:
           INVENTORY: ${{ steps.open.outputs.inventory-path }}
@@ -277,36 +157,6 @@ jobs:
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-host-firewall.yml --tags apply-firewall-rules
-
-      - name: "Close BASE access"
-        if: always()
-        uses: ./.github/actions/close-base-access
-        with:
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          work-dir: ${{ steps.open.outputs.work-dir }}
-          runner-cidr: ${{ steps.open.outputs.runner-cidr }}
-
-  verify-base:
-    name: "Verify BASE configuration"
-    needs: [resolve-base, configure-host-firewall]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-
-      - name: "Open BASE access"
-        id: open
-        uses: ./.github/actions/open-base-access
-        with:
-          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
-          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
-          reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
-          admin-port: ${{ needs.resolve-base.outputs.admin_port }}
-          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
 
       - name: "Verify OpenVPN service"
         env:
