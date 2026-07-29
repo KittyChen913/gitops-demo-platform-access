@@ -54,20 +54,10 @@ jobs:
             .linode.openvpn_admin_username == "openvpn"
           ' config/shared.json >/dev/null
 
-      - name: "Prepare AWS OIDC inputs"
-        id: aws_oidc_inputs
-        run: |
-          set -euo pipefail
-          aws_region="$(jq -r '.aws.region' config/shared.json)"
-          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
-          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
-          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
-
       - name: "Configure AWS credentials via OIDC"
         uses: ./.github/actions/configure-aws-credentials
         with:
-          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
 
       - name: "Terraform init"
         env:
@@ -191,20 +181,10 @@ jobs:
           actual_plan_sha256="$(sha256sum "${plan_file}" | awk '{print $1}')"
           test "${actual_plan_sha256}" = "${EXPECTED_PLAN_SHA256}"
 
-      - name: "Prepare AWS OIDC inputs"
-        id: aws_oidc_inputs
-        run: |
-          set -euo pipefail
-          aws_region="$(jq -r '.aws.region' config/shared.json)"
-          role_name="$(jq -r '.aws.oidc_role_name' config/shared.json)"
-          printf 'aws_region=%s\n' "${aws_region}" >> "${GITHUB_OUTPUT}"
-          printf 'role_name=%s\n' "${role_name}" >> "${GITHUB_OUTPUT}"
-
       - name: "Configure AWS credentials via OIDC"
         uses: ./.github/actions/configure-aws-credentials
         with:
-          aws-region: ${{ steps.aws_oidc_inputs.outputs.aws_region }}
-          role-arn: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/${{ steps.aws_oidc_inputs.outputs.role_name }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
 
       - name: "Terraform init"
         env:
