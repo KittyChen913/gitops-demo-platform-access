@@ -118,7 +118,9 @@ fi
 
 ssh_ready_deadline=$((SECONDS + ssh_ready_timeout_seconds))
 scanned_key=""
+keyscan_attempt=0
 while ((SECONDS < ssh_ready_deadline)); do
+  keyscan_attempt=$((keyscan_attempt + 1))
   if ! scanned_key="$(ssh-keyscan -T 10 -t ed25519 "${reserved_ip}" 2>/dev/null |
     awk 'NF >= 3 {print $2 " " $3}' |
     sort -u)"; then
@@ -127,6 +129,11 @@ while ((SECONDS < ssh_ready_deadline)); do
   if [[ "${scanned_key}" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]; then
     break
   fi
+  remaining=$((ssh_ready_deadline - SECONDS))
+  if ((remaining <= 0)); then
+    break
+  fi
+  echo "等待 SSH host key 可被掃描（第 ${keyscan_attempt} 次；剩餘約 ${remaining} 秒）..."
   sleep 10
 done
 [[ "${scanned_key}" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]] || { echo "host key scan did not become ready before timeout" >&2; exit 1; }
@@ -141,12 +148,15 @@ fi
 umask 077
 printf '%s %s\n' "${reserved_ip}" "${scanned_key}" > "${known_hosts_file}"
 chmod 600 "${known_hosts_file}" "${private_key_file}"
+ssh_attempt=0
 while ! ssh -i "${private_key_file}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
   -o "UserKnownHostsFile=${known_hosts_file}" -o ConnectTimeout=10 "${ssh_user}@${reserved_ip}" true 2>/dev/null; do
+  ssh_attempt=$((ssh_attempt + 1))
   if ((SECONDS >= ssh_ready_deadline)); then
     echo "strict-pinned SSH did not become ready before timeout" >&2
     exit 1
   fi
+  echo "等待 strict host-key-pinned SSH 可接受連線（第 ${ssh_attempt} 次；剩餘約 $((ssh_ready_deadline - SECONDS)) 秒）..."
   sleep 10
 done
 echo "SSH host key verified after control-plane resource checks."
