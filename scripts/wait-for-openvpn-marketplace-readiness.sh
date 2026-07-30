@@ -28,6 +28,7 @@ ssh_common_args=(
   -i "${private_key_file}"
   -o BatchMode=yes
   -o ConnectTimeout=5
+  -o IdentitiesOnly=yes
   -o ServerAliveInterval=5
   -o ServerAliveCountMax=1
   -o StrictHostKeyChecking=yes
@@ -38,7 +39,6 @@ describe_readiness_failure() {
   local exit_code="$1"
 
   case "${exit_code}" in
-    20) printf '%s\n' 'SSH 已連線，但遠端使用者無法執行免互動 sudo' ;;
     21) printf '%s\n' 'SSH 已連線，但 sacli 尚未安裝或不可執行' ;;
     22) printf '%s\n' 'SSH 已連線，但 openvpnas service 尚未 active' ;;
     23) printf '%s\n' 'SSH 已連線且 openvpnas 已 active，但 .credentials 尚未產生（Marketplace certbot 步驟可能尚未完成）' ;;
@@ -65,16 +65,13 @@ report_marketplace_diagnostics() {
 
   echo "::group::OpenVPN Marketplace 安裝診斷"
   set +e
+  # automation 帳號只有密碼閘 sudo（見 .credentials），這裡的檢查刻意不用
+  # sudo；只有 root 才能讀的 stackscript log 才機會性地試 sudo -n，失敗就降級。
   # 遠端命令中的變數應由 VM shell 展開，不可由 runner 預先展開。
   # shellcheck disable=SC2016
   timeout --signal=TERM "${SSH_ATTEMPT_TIMEOUT_SECONDS}s" ssh "${ssh_common_args[@]}" \
     "${ssh_user}@${reserved_ip}" \
-    'if ! sudo -n true >/dev/null 2>&1; then
-       echo "sudo=unavailable"
-       exit 0
-     fi
-
-     if sudo -n test -x /usr/local/openvpn_as/scripts/sacli; then
+    'if test -x /usr/local/openvpn_as/scripts/sacli; then
        echo "sacli=present"
      else
        echo "sacli=absent"
@@ -86,8 +83,8 @@ report_marketplace_diagnostics() {
        echo "openvpn_as_package=absent"
      fi
 
-     printf "openvpnas_service=%s\n" "$(sudo -n systemctl is-active openvpnas 2>/dev/null || true)"
-     printf "cloud_final_service=%s\n" "$(sudo -n systemctl is-active cloud-final.service 2>/dev/null || true)"
+     printf "openvpnas_service=%s\n" "$(systemctl is-active openvpnas 2>/dev/null || true)"
+     printf "cloud_final_service=%s\n" "$(systemctl is-active cloud-final.service 2>/dev/null || true)"
 
      if pgrep -x apt >/dev/null 2>&1 ||
         pgrep -x apt-get >/dev/null 2>&1 ||
@@ -97,7 +94,7 @@ report_marketplace_diagnostics() {
        echo "package_manager=idle"
      fi
 
-     if sudo -n test -r /var/log/stackscript.log; then
+     if sudo -n test -r /var/log/stackscript.log 2>/dev/null; then
        marker_count="$(sudo -n grep -ciE "fatal:|FAILED!|Traceback|ERROR" /var/log/stackscript.log 2>/dev/null || true)"
        printf "stackscript_log=present,error_markers=%s\n" "${marker_count:-unknown}"
      else
@@ -113,10 +110,9 @@ report_marketplace_diagnostics() {
   echo "::endgroup::"
 }
 
-remote_check="$(printf 'if ! sudo -n true 2>/dev/null; then exit 20; fi
-if ! sudo -n test -x /usr/local/openvpn_as/scripts/sacli; then exit 21; fi
-if ! sudo -n systemctl is-active --quiet openvpnas; then exit 22; fi
-if ! sudo -n test -f %q; then exit 23; fi' "${credentials_path}")"
+remote_check="$(printf 'if ! test -x /usr/local/openvpn_as/scripts/sacli; then exit 21; fi
+if ! systemctl is-active --quiet openvpnas; then exit 22; fi
+if ! test -f %q; then exit 23; fi' "${credentials_path}")"
 
 deadline=$((SECONDS + READINESS_TIMEOUT_SECONDS))
 attempt=0
