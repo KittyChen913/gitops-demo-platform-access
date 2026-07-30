@@ -7,3 +7,20 @@
     group: root
     mode: "0644"
   notify: Apply IPv4 forwarding
+
+- name: Install automation egress NAT service
+  ansible.builtin.template:
+    src: openvpn-automation-egress.service.j2
+    dest: /etc/systemd/system/openvpn-automation-egress.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: automation_egress_service
+  notify: Restart automation egress NAT
+
+- name: Enable automation egress NAT
+  ansible.builtin.systemd_service:
+    name: openvpn-automation-egress.service
+    enabled: true
+    state: started
+    daemon_reload: "{{ automation_egress_service.changed }}"

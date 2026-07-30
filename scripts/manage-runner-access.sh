@@ -10,6 +10,7 @@ instance_id="${3:-}"
 runner_cidr="${4:-}"
 backup_file="${5:-}"
 admin_port="${6:-}"
+access_scope="${7:-ssh-admin}"
 
 [[ "${mode}" == open || "${mode}" == cleanup ]] || { echo "mode must be open or cleanup" >&2; exit 2; }
 [[ "${firewall_id}" =~ ^[0-9]+$ && "${instance_id}" =~ ^[0-9]+$ ]] || { echo "invalid Linode identity" >&2; exit 2; }
@@ -87,6 +88,13 @@ if [[ "${mode}" == open ]]; then
     echo "invalid OpenVPN Admin port" >&2
     exit 2
   fi
+  case "${access_scope}" in
+    ssh-admin|admin-only) ;;
+    *)
+      echo "access scope must be ssh-admin or admin-only" >&2
+      exit 2
+      ;;
+  esac
   firewall="$(api_get "/networking/firewalls/${firewall_id}")"
   devices="$(api_get "/networking/firewalls/${firewall_id}/devices")"
   jq -e '.status == "enabled"' <<<"${firewall}" >/dev/null
@@ -99,10 +107,18 @@ if [[ "${mode}" == open ]]; then
   rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
   jq '{inbound, inbound_policy, outbound, outbound_policy}' <<<"${rules}" > "${backup_file}"
   updated="${backup_file}.updated"
-  jq --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '.inbound += [
-    {label:"temporary-runner-ssh",action:"ACCEPT",protocol:"TCP",ports:"22",addresses:{ipv4:[$cidr],ipv6:[]}},
-    {label:"temporary-runner-admin",action:"ACCEPT",protocol:"TCP",ports:$admin_port,addresses:{ipv4:[$cidr],ipv6:[]}}
-  ]' "${backup_file}" > "${updated}"
+  if [[ "${access_scope}" == "ssh-admin" ]]; then
+    jq --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '.inbound += [
+      {label:"temporary-runner-ssh",action:"ACCEPT",protocol:"TCP",ports:"22",addresses:{ipv4:[$cidr],ipv6:[]}},
+      {label:"temporary-runner-admin",action:"ACCEPT",protocol:"TCP",ports:$admin_port,addresses:{ipv4:[$cidr],ipv6:[]}}
+    ]' "${backup_file}" > "${updated}"
+    expected_rule_count=2
+  else
+    jq --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '.inbound += [
+      {label:"temporary-runner-admin",action:"ACCEPT",protocol:"TCP",ports:$admin_port,addresses:{ipv4:[$cidr],ipv6:[]}}
+    ]' "${backup_file}" > "${updated}"
+    expected_rule_count=1
+  fi
   restore_on_error() {
     local exit_code=$?
 
@@ -121,18 +137,25 @@ if [[ "${mode}" == open ]]; then
   rules_ready=""
   while ((SECONDS < rules_ready_deadline)); do
     rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
-    if jq -e --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '
+    if jq -e \
+      --arg cidr "${runner_cidr}" \
+      --arg admin_port "${admin_port}" \
+      --arg access_scope "${access_scope}" \
+      --argjson expected_rule_count "${expected_rule_count}" '
       [.inbound[]? | select(
         (.label == "temporary-runner-ssh" or .label == "temporary-runner-admin") and
         .action == "ACCEPT" and
         (.protocol | ascii_upcase) == "TCP"
       )] as $temporary_rules |
-      ($temporary_rules | length) == 2 and
-      any($temporary_rules[];
-        .label == "temporary-runner-ssh" and
-        .ports == "22" and
-        .addresses.ipv4 == [$cidr] and
-        ((.addresses.ipv6 // []) | length) == 0
+      ($temporary_rules | length) == $expected_rule_count and
+      (
+        $access_scope == "admin-only" or
+        any($temporary_rules[];
+          .label == "temporary-runner-ssh" and
+          .ports == "22" and
+          .addresses.ipv4 == [$cidr] and
+          ((.addresses.ipv6 // []) | length) == 0
+        )
       ) and
       any($temporary_rules[];
         .label == "temporary-runner-admin" and
@@ -151,7 +174,7 @@ if [[ "${mode}" == open ]]; then
     exit 1
   }
   trap - EXIT
-  echo "Temporary runner /32 access opened after identity checks."
+  echo "Temporary runner /32 ${access_scope} access opened after identity checks."
 else
   [[ -f "${backup_file}" && ! -L "${backup_file}" ]] || { echo "firewall cleanup backup is missing" >&2; exit 1; }
   api_put_rules "${backup_file}"

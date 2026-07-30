@@ -39,7 +39,10 @@
   },
   "credential_bootstrap": {
     "material_version": 1,
-    "admin_password_length": 32
+    "admin_password_length": 32,
+    "automation_identity_contract_path": "config/automation-identities.json",
+    "automation_password_length": 32,
+    "automation_password_version": 1
   },
   "terraform_backend": {
     "bucket": "kc-gitops-demo-tfstate",

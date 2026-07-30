@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenVPN automation client egress NAT
+After=network-online.target openvpnas.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -ec '/usr/sbin/iptables -t nat -C POSTROUTING -s {{ openvpn_tunnel_cidr }} -o {{ openvpn_public_interface }} -j MASQUERADE 2>/dev/null || /usr/sbin/iptables -t nat -A POSTROUTING -s {{ openvpn_tunnel_cidr }} -o {{ openvpn_public_interface }} -j MASQUERADE'
+ExecStop=/bin/sh -ec '/usr/sbin/iptables -t nat -C POSTROUTING -s {{ openvpn_tunnel_cidr }} -o {{ openvpn_public_interface }} -j MASQUERADE 2>/dev/null && /usr/sbin/iptables -t nat -D POSTROUTING -s {{ openvpn_tunnel_cidr }} -o {{ openvpn_public_interface }} -j MASQUERADE || true'
+
+[Install]
+WantedBy=multi-user.target

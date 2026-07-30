@@ -1,0 +1,20 @@
+name: "Close Automation VPN Tunnel"
+description: "Close an automation VPN tunnel and remove runner-local material."
+
+inputs:
+  state-directory:
+    description: "State directory produced by open-automation-vpn-tunnel."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Close automation VPN tunnel"
+      if: always()
+      shell: bash
+      env:
+        STATE_DIRECTORY: ${{ inputs.state-directory }}
+        VPN_SCRIPT: ${{ github.action_path }}/../../../scripts/manage-automation-vpn-tunnel.sh
+      run: |
+        set -euo pipefail
+        bash "${VPN_SCRIPT}" close "${STATE_DIRECTORY}"

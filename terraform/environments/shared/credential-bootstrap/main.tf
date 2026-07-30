@@ -1,6 +1,14 @@
 locals {
   deployment_config = jsondecode(file("${path.module}/../../../../config/shared.json"))
-  material_version  = local.deployment_config.credential_bootstrap.material_version
+  automation_identity_contract = jsondecode(file(
+    "${path.module}/../../../../${local.deployment_config.credential_bootstrap.automation_identity_contract_path}"
+  ))
+  material_version            = local.deployment_config.credential_bootstrap.material_version
+  automation_password_version = local.deployment_config.credential_bootstrap.automation_password_version
+  automation_identities = {
+    for identity in local.automation_identity_contract.identities :
+    identity.username => identity
+  }
 }
 
 ephemeral "random_password" "openvpn_admin" {
@@ -15,6 +23,18 @@ ephemeral "random_password" "openvpn_admin" {
 
 ephemeral "tls_private_key" "ansible" {
   algorithm = "ED25519"
+}
+
+ephemeral "random_password" "automation_identity" {
+  for_each = local.automation_identities
+
+  length           = local.deployment_config.credential_bootstrap.automation_password_length
+  special          = true
+  min_lower        = 4
+  min_upper        = 4
+  min_numeric      = 4
+  min_special      = 4
+  override_special = "_%@-"
 }
 
 resource "aws_ssm_parameter" "openvpn_admin_password" {
@@ -38,10 +58,30 @@ resource "aws_ssm_parameter" "openvpn_ssh_public_key" {
   value_wo_version = local.material_version
 }
 
+resource "aws_ssm_parameter" "automation_identity_password" {
+  for_each = local.automation_identities
+
+  name             = each.value.password_ssm_path
+  type             = "SecureString"
+  value_wo         = ephemeral.random_password.automation_identity[each.key].result
+  value_wo_version = local.automation_password_version
+}
+
 check "credential_bootstrap_contract" {
   assert {
     condition = (
       local.material_version == 1 &&
+      local.automation_password_version == 1 &&
+      local.automation_identity_contract.schema_version == 1 &&
+      local.automation_identity_contract.group == "ci-automation" &&
+      length(local.automation_identities) == 3 &&
+      alltrue([
+        for username, identity in local.automation_identities :
+        startswith(identity.profile_ssm_path, "/gitops/platform-access/automation/${username}/") &&
+        startswith(identity.password_ssm_path, "/gitops/platform-access/automation/${username}/") &&
+        endswith(identity.profile_ssm_path, "/PROFILE") &&
+        endswith(identity.password_ssm_path, "/PASSWORD")
+      ]) &&
       startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_admin_password, "/gitops/platform-access/") &&
       startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64, "/gitops/platform-access/") &&
       startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_public_key, "/gitops/platform-access/")

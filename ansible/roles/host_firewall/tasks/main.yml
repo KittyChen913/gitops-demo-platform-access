@@ -73,6 +73,49 @@
   notify: Reload UFW
   tags: apply-firewall-rules
 
+- name: Allow VPN clients to reach the Access Server client API
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - allow
+      - in
+      - "on"
+      - "{{ openvpn_tunnel_interface }}"
+      - from
+      - "{{ openvpn_tunnel_cidr }}"
+      - to
+      - "{{ internal_dns_server_ip }}"
+      - port
+      - "{{ openvpn_admin_port }}"
+      - proto
+      - tcp
+  register: ufw_vpn_client_api_allow
+  changed_when: >-
+    'Skipping adding existing rule' not in ufw_vpn_client_api_allow.stdout
+  notify: Reload UFW
+  tags: apply-firewall-rules
+
+- name: Allow VPN clients to forward through the public interface
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - route
+      - allow
+      - in
+      - "on"
+      - "{{ openvpn_tunnel_interface }}"
+      - out
+      - "on"
+      - "{{ openvpn_public_interface }}"
+      - from
+      - "{{ openvpn_tunnel_cidr }}"
+      - to
+      - any
+  register: ufw_automation_egress
+  changed_when: "'Skipping adding existing rule' not in ufw_automation_egress.stdout"
+  notify: Reload UFW
+  tags: apply-firewall-rules
+
 - name: Remove any generic public DNS allow rule
   ansible.builtin.command:
     argv: [ufw, --force, delete, allow, "53/{{ item }}"]

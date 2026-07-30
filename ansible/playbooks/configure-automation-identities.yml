@@ -1,5 +1,5 @@
 ---
-- name: Verify Platform Access BASE configuration
+- name: Configure automation VPN identities
   hosts: openvpn_servers
   become: true
   gather_facts: false
@@ -11,14 +11,22 @@
     - ansible.builtin.import_tasks: tasks/base-pretasks.yml
       tags: always
 
-  tasks:
-    - ansible.builtin.import_tasks: tasks/base-postverify.yml
+    - name: Validate automation identity password hand-off
+      ansible.builtin.assert:
+        that:
+          - automation_identity_contract.schema_version == 1
+          - openvpn_automation_group == 'ci-automation'
+          - openvpn_automation_identities | length == 3
+          - lookup('ansible.builtin.env', 'AUTOMATION_IDENTITY_PASSWORD_DIRECTORY') | length > 0
+        fail_msg: Automation identity contract or password hand-off is invalid.
+      no_log: true
+      tags: always
 
     - name: Initialize automation identity password map
       ansible.builtin.set_fact:
         automation_identity_passwords: {}
       no_log: true
-      tags: verify-automation-identities
+      tags: always
 
     - name: Load automation identity passwords
       ansible.builtin.set_fact:
@@ -37,10 +45,7 @@
       loop_control:
         label: "{{ item.username }}"
       no_log: true
-      tags: verify-automation-identities
+      tags: always
 
-    - name: Verify automation VPN identities
-      ansible.builtin.include_role:
-        name: automation_identities
-        tasks_from: verify
-      tags: verify-automation-identities
+  roles:
+    - automation_identities

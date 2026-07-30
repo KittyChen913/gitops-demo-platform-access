@@ -25,6 +25,14 @@ inputs:
     description: "Whether to install Ansible and build an inventory."
     required: false
     default: "true"
+  fetch-automation-passwords:
+    description: "Whether to fetch automation identity passwords from SSM."
+    required: false
+    default: "false"
+  access-scope:
+    description: "Temporary access scope (ssh-admin or admin-only)."
+    required: false
+    default: "ssh-admin"
 
 outputs:
   work-dir:
@@ -36,6 +44,9 @@ outputs:
   runner-cidr:
     description: "This runner's public IPv4 /32, used to close access later."
     value: ${{ steps.runner_ip.outputs.runner_cidr }}
+  automation-password-directory:
+    description: "Directory containing one password file per automation identity."
+    value: ${{ steps.workdir.outputs.work_dir }}/automation-passwords
 
 runs:
   using: "composite"
@@ -74,22 +85,39 @@ runs:
       env:
         WORK_DIR: ${{ steps.workdir.outputs.work_dir }}
         FETCH_ADMIN_PASSWORD: ${{ inputs.fetch-admin-password }}
+        FETCH_AUTOMATION_PASSWORDS: ${{ inputs.fetch-automation-passwords }}
+        ACCESS_SCOPE: ${{ inputs.access-scope }}
       run: |
         set -euo pipefail
         umask 077
         config="${GITHUB_WORKSPACE}/config/shared.json"
         linode_token="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")" --with-decryption --query Parameter.Value --output text)"
-        private_key_b64="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" --with-decryption --query Parameter.Value --output text)"
         echo "::add-mask::${linode_token}"
-        echo "::add-mask::${private_key_b64}"
         printf '%s' "${linode_token}" > "${WORK_DIR}/linode_token"
-        printf '%s' "${private_key_b64}" | base64 --decode > "${WORK_DIR}/id_ed25519"
-        chmod 600 "${WORK_DIR}/linode_token" "${WORK_DIR}/id_ed25519"
+        chmod 600 "${WORK_DIR}/linode_token"
+        if [[ "${ACCESS_SCOPE}" == "ssh-admin" ]]; then
+          private_key_b64="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64' "${config}")" --with-decryption --query Parameter.Value --output text)"
+          echo "::add-mask::${private_key_b64}"
+          printf '%s' "${private_key_b64}" | base64 --decode > "${WORK_DIR}/id_ed25519"
+          chmod 600 "${WORK_DIR}/id_ed25519"
+        fi
         if [[ "${FETCH_ADMIN_PASSWORD}" == "true" ]]; then
           admin_password="$(aws ssm get-parameter --name "$(jq -r '.aws.ssm_parameter_paths.openvpn_admin_password' "${config}")" --with-decryption --query Parameter.Value --output text)"
           echo "::add-mask::${admin_password}"
           printf '%s' "${admin_password}" > "${WORK_DIR}/admin_password"
           chmod 600 "${WORK_DIR}/admin_password"
+        fi
+        if [[ "${FETCH_AUTOMATION_PASSWORDS}" == "true" ]]; then
+          password_dir="${WORK_DIR}/automation-passwords"
+          mkdir -p "${password_dir}"
+          chmod 700 "${password_dir}"
+          while IFS=$'\t' read -r username parameter_path; do
+            [[ "${username}" =~ ^ci-[a-z-]+$ ]]
+            password="$(aws ssm get-parameter --name "${parameter_path}" --with-decryption --query Parameter.Value --output text)"
+            echo "::add-mask::${password}"
+            printf '%s' "${password}" > "${password_dir}/${username}"
+            chmod 600 "${password_dir}/${username}"
+          done < <(jq -r '.identities[] | [.username, .password_ssm_path] | @tsv' config/automation-identities.json)
         fi
 
     - name: "Open temporary runner access"
@@ -100,12 +128,14 @@ runs:
         FIREWALL_ID: ${{ inputs.firewall-id }}
         INSTANCE_ID: ${{ inputs.instance-id }}
         ADMIN_PORT: ${{ inputs.admin-port }}
+        ACCESS_SCOPE: ${{ inputs.access-scope }}
       run: |
         set -euo pipefail
         LINODE_TOKEN="$(cat "${WORK_DIR}/linode_token")" bash scripts/manage-runner-access.sh open \
-          "${FIREWALL_ID}" "${INSTANCE_ID}" "${RUNNER_CIDR}" "${WORK_DIR}/firewall-baseline.json" "${ADMIN_PORT}"
-
+          "${FIREWALL_ID}" "${INSTANCE_ID}" "${RUNNER_CIDR}" "${WORK_DIR}/firewall-baseline.json" \
+          "${ADMIN_PORT}" "${ACCESS_SCOPE}"
     - name: "Attest SSH host key"
+      if: inputs.access-scope == 'ssh-admin'
       shell: bash
       env:
         WORK_DIR: ${{ steps.workdir.outputs.work_dir }}

@@ -1,0 +1,104 @@
+name: "Open Automation VPN Tunnel"
+description: "Open a repository-scoped OpenVPN tunnel with isolated host routes."
+
+inputs:
+  identity:
+    description: "Approved automation identity."
+    required: true
+  profile-ssm-parameter:
+    description: "SSM String parameter containing the user-locked VPN profile."
+    required: true
+  password-ssm-parameter:
+    description: "SSM SecureString parameter containing the VPN password."
+    required: true
+  route-targets:
+    description: "Newline-separated URL, hostname, or IPv4 route targets."
+    required: true
+  health-targets:
+    description: "Newline-separated host:port connectivity checks."
+    required: true
+
+outputs:
+  state-directory:
+    description: "Runner-local state passed to close-automation-vpn-tunnel."
+    value: ${{ steps.prepare.outputs.state_directory }}
+  tunnel-interface:
+    description: "Tunnel interface selected by the isolated routes."
+    value: ${{ steps.open.outputs.tunnel_interface }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: "Validate automation VPN contract"
+      shell: bash
+      env:
+        IDENTITY: ${{ inputs.identity }}
+        PROFILE_PARAMETER: ${{ inputs.profile-ssm-parameter }}
+        PASSWORD_PARAMETER: ${{ inputs.password-ssm-parameter }}
+      run: |
+        set -euo pipefail
+        [[ "${IDENTITY}" =~ ^ci-(cluster|infra|user-provisioning)$ ]]
+        test "${PROFILE_PARAMETER}" = "/gitops/platform-access/automation/${IDENTITY}/PROFILE"
+        test "${PASSWORD_PARAMETER}" = "/gitops/platform-access/automation/${IDENTITY}/PASSWORD"
+        command -v aws >/dev/null
+
+    - name: "Install OpenVPN client"
+      shell: bash
+      run: |
+        set -euo pipefail
+        if ! command -v openvpn >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends openvpn
+        fi
+
+    - name: "Prepare VPN runtime material"
+      id: prepare
+      shell: bash
+      env:
+        IDENTITY: ${{ inputs.identity }}
+        PROFILE_PARAMETER: ${{ inputs.profile-ssm-parameter }}
+        PASSWORD_PARAMETER: ${{ inputs.password-ssm-parameter }}
+      run: |
+        set -euo pipefail
+        umask 077
+        state_directory="${RUNNER_TEMP}/automation-vpn-${IDENTITY}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${GITHUB_JOB}"
+        mkdir -p "${state_directory}"
+        chmod 700 "${state_directory}"
+        cleanup_on_error() {
+          local exit_code=$?
+          trap - EXIT
+          rm -rf -- "${state_directory}"
+          exit "${exit_code}"
+        }
+        trap cleanup_on_error EXIT
+        aws ssm get-parameter \
+          --name "${PROFILE_PARAMETER}" \
+          --query Parameter.Value \
+          --output text > "${state_directory}/profile.ovpn"
+        password="$(aws ssm get-parameter \
+          --name "${PASSWORD_PARAMETER}" \
+          --with-decryption \
+          --query Parameter.Value \
+          --output text)"
+        test -n "${password}"
+        echo "::add-mask::${password}"
+        printf '%s' "${password}" > "${state_directory}/password"
+        chmod 600 "${state_directory}/profile.ovpn" "${state_directory}/password"
+        printf 'state_directory=%s\n' "${state_directory}" >> "${GITHUB_OUTPUT}"
+        trap - EXIT
+
+    - name: "Open isolated VPN routes"
+      id: open
+      shell: bash
+      env:
+        AUTOMATION_VPN_IDENTITY: ${{ inputs.identity }}
+        VPN_PROFILE_PATH: ${{ steps.prepare.outputs.state_directory }}/profile.ovpn
+        VPN_PASSWORD_PATH: ${{ steps.prepare.outputs.state_directory }}/password
+        VPN_ROUTE_TARGETS: ${{ inputs.route-targets }}
+        VPN_HEALTH_TARGETS: ${{ inputs.health-targets }}
+        STATE_DIRECTORY: ${{ steps.prepare.outputs.state_directory }}
+        VPN_SCRIPT: ${{ github.action_path }}/../../../scripts/manage-automation-vpn-tunnel.sh
+      run: |
+        set -euo pipefail
+        bash "${VPN_SCRIPT}" open "${STATE_DIRECTORY}"
+        printf 'tunnel_interface=%s\n' "$(cat "${STATE_DIRECTORY}/tunnel-interface")" >> "${GITHUB_OUTPUT}"

@@ -74,6 +74,7 @@ jobs:
           reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
           admin-port: ${{ needs.resolve-base.outputs.admin_port }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          fetch-automation-passwords: "true"
 
       - name: "Configure IPv4 forwarding"
         env:
@@ -115,6 +116,15 @@ jobs:
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-openvpn-server.yml --tags access-groups
 
+      - name: "Configure automation VPN identities"
+        env:
+          INVENTORY: ${{ steps.open.outputs.inventory-path }}
+          AUTOMATION_IDENTITY_PASSWORD_DIRECTORY: ${{ steps.open.outputs.automation-password-directory }}
+        run: |
+          set -euo pipefail
+          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-automation-identities.yml
+
       - name: "Remove legacy firewall rules"
         env:
           INVENTORY: ${{ steps.open.outputs.inventory-path }}
@@ -154,6 +164,16 @@ jobs:
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml --tags verify-dns-exposure
+
+      - name: "Verify automation VPN identities"
+        env:
+          INVENTORY: ${{ steps.open.outputs.inventory-path }}
+          AUTOMATION_IDENTITY_PASSWORD_DIRECTORY: ${{ steps.open.outputs.automation-password-directory }}
+        run: |
+          set -euo pipefail
+          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml \
+              --tags verify-automation-identities
 
       - name: "Close BASE access"
         if: always()

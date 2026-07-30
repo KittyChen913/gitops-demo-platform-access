@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "group": "ci-automation",
+  "identities": [
+    {
+      "username": "ci-cluster",
+      "repo": "gitops-demo-cluster",
+      "purpose": "LKE and ArgoCD Kubernetes API access through VPN egress NAT",
+      "profile_ssm_path": "/gitops/platform-access/automation/ci-cluster/PROFILE",
+      "password_ssm_path": "/gitops/platform-access/automation/ci-cluster/PASSWORD"
+    },
+    {
+      "username": "ci-infra",
+      "repo": "gitops-demo-infra",
+      "purpose": "LKE and ArgoCD Kubernetes API access through VPN egress NAT",
+      "profile_ssm_path": "/gitops/platform-access/automation/ci-infra/PROFILE",
+      "password_ssm_path": "/gitops/platform-access/automation/ci-infra/PASSWORD"
+    },
+    {
+      "username": "ci-user-provisioning",
+      "repo": "gitops-demo-user-provisioning",
+      "purpose": "Access Server local user and token API access on TCP 943",
+      "profile_ssm_path": "/gitops/platform-access/automation/ci-user-provisioning/PROFILE",
+      "password_ssm_path": "/gitops/platform-access/automation/ci-user-provisioning/PASSWORD"
+    }
+  ]
+}

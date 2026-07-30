@@ -5,6 +5,9 @@ platform_config: >-
 access_contract: >-
   {{ lookup('ansible.builtin.file',
   playbook_dir ~ '/../../config/access-groups.json') | from_json }}
+automation_identity_contract: >-
+  {{ lookup('ansible.builtin.file',
+  playbook_dir ~ '/../../config/automation-identities.json') | from_json }}
 openvpn_admin_password: >-
   {{ lookup('ansible.builtin.env', 'OPENVPN_ADMIN_PASSWORD') }}
 openvpn_tunnel_cidr: "{{ platform_config.network.vpn_client_cidr }}"
@@ -17,3 +20,5 @@ openvpn_protocol: "{{ platform_config.linode.openvpn_protocol }}"
 openvpn_admin_username: >-
   {{ platform_config.linode.openvpn_admin_username }}
 openvpn_access_groups: "{{ access_contract.groups }}"
+openvpn_automation_group: "{{ automation_identity_contract.group }}"
+openvpn_automation_identities: "{{ automation_identity_contract.identities }}"

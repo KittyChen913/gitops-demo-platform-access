@@ -4,8 +4,9 @@
 
 ## Ownership
 
-- 本 Repository 擁有 Shared OpenVPN BASE、Reserved IPv4、VPN Server Firewall、Internal DNS、routing/NAT、一般 User groups、credential bootstrap 與 network SSM outputs。
+- 本 Repository 擁有 Shared OpenVPN BASE、Reserved IPv4、VPN Server Firewall、Internal DNS、routing/NAT、一般 User groups、credential bootstrap、CI 自動化 VPN 身份與 network SSM outputs。
 - 不管理 LKE、Worker Firewall、ArgoCD、application manifests 或一般 VPN User lifecycle。
+- CI 自動化 VPN 身份綁定 consuming Repository，屬 credential bootstrap 的延伸；一般員工 User 的 onboard／offboard 與 email token lifecycle 仍由 `gitops-demo-user-provisioning` 管理。
 - 目前不實作 Dev／Prod endpoint SYNC；沒有 runtime evidence 的功能不得預先加入。
 
 ## 實作規則

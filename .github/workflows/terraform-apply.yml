@@ -217,6 +217,9 @@ jobs:
             "$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"; do
             aws ssm get-parameter --name "${required_path}" --query Parameter.Name --output text >/dev/null
           done
+          while IFS= read -r required_path; do
+            aws ssm get-parameter --name "${required_path}" --query Parameter.Name --output text >/dev/null
+          done < <(jq -r '.identities[].password_ssm_path' config/automation-identities.json)
 
       - name: "Terraform apply"
         env:

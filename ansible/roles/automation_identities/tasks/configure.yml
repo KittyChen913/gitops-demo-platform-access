@@ -1,0 +1,170 @@
+---
+- name: Read automation group properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ openvpn_automation_group }}"
+      - UserPropGet
+  register: automation_group_query
+  changed_when: false
+  no_log: true
+
+- name: Record automation group properties
+  ansible.builtin.set_fact:
+    automation_group_properties: >-
+      {{ (automation_group_query.stdout | from_json)
+         .get(openvpn_automation_group, {}) }}
+  no_log: true
+
+- name: Enforce the automation group contract
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_automation_group }}"
+      - --key
+      - "{{ item.key }}"
+      - --value
+      - "{{ item.value }}"
+      - UserPropPut
+  loop:
+    - {key: group_declare, value: "true"}
+    - {key: type, value: group}
+    - {key: prop_superuser, value: "false"}
+    - {key: prop_autologin, value: "false"}
+  loop_control:
+    label: "{{ item.key }}"
+  when: >-
+    (automation_group_properties.get(item.key, '') | string | lower) !=
+    (item.value | string | lower)
+  notify: Apply Access Server changes
+
+- name: Read automation identity properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ item.username }}"
+      - UserPropGet
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  register: automation_identity_queries
+  changed_when: false
+  no_log: true
+
+- name: Build automation identity property map
+  ansible.builtin.set_fact:
+    automation_identity_properties: >-
+      {{ automation_identity_properties | default({}) |
+         combine({
+           item.item.username:
+           ((item.stdout | from_json).get(item.item.username, {}))
+         }) }}
+  loop: "{{ automation_identity_queries.results }}"
+  loop_control:
+    label: "{{ item.item.username }}"
+  no_log: true
+
+- name: Enforce automation identity properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.0.username }}"
+      - --key
+      - "{{ item.1.key }}"
+      - --value
+      - "{{ item.1.value }}"
+      - UserPropPut
+  loop: >-
+    {{ openvpn_automation_identities |
+       product([
+         {'key': 'type', 'value': 'user_connect'},
+         {'key': 'user_auth_type', 'value': 'local'},
+         {'key': 'conn_group', 'value': openvpn_automation_group},
+         {'key': 'prop_superuser', 'value': 'false'},
+         {'key': 'prop_autologin', 'value': 'false'}
+       ]) | list }}
+  loop_control:
+    label: "{{ item.0.username }}:{{ item.1.key }}"
+  when: >-
+    (automation_identity_properties[item.0.username]
+     .get(item.1.key, '') | string | lower) !=
+    (item.1.value | string | lower)
+  no_log: true
+  notify: Apply Access Server changes
+
+- name: Set automation identity passwords
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.username }}"
+      - --new_pass
+      - "{{ automation_identity_passwords[item.username] }}"
+      - SetLocalPassword
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  changed_when: true
+  no_log: true
+  notify: Apply Access Server changes
+
+- name: Apply automation identity changes before profile generation
+  ansible.builtin.meta: flush_handlers
+
+# Marketplace StackScript 未釘選 Access Server minor 版本，因此使用各版本皆支援的
+# GetUserlogin 介面，不預先加入 2.9+ 才支援的 prefer-tls-crypt-v2 旗標。
+- name: Generate user-locked automation profiles
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.username }}"
+      - GetUserlogin
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  register: automation_identity_profiles
+  changed_when: false
+  no_log: true
+
+- name: Validate automation profile size
+  ansible.builtin.assert:
+    that:
+      - item.stdout | length > 0
+      - item.stdout | length <= 8192
+    fail_msg: Automation VPN profile exceeds the SSM Advanced parameter limit.
+  loop: "{{ automation_identity_profiles.results }}"
+  loop_control:
+    label: "{{ item.item.username }}"
+  no_log: true
+
+- name: Publish automation profiles to SSM
+  ansible.builtin.command:
+    argv:
+      - aws
+      - ssm
+      - put-parameter
+      - --name
+      - "{{ item.item.profile_ssm_path }}"
+      - --type
+      - String
+      - --tier
+      - Advanced
+      - --overwrite
+      - --value
+      - "{{ item.stdout }}"
+      - --output
+      - text
+      - --query
+      - Version
+  loop: "{{ automation_identity_profiles.results }}"
+  loop_control:
+    label: "{{ item.item.username }}"
+  delegate_to: localhost
+  become: false
+  changed_when: true
+  no_log: true

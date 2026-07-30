@@ -1,0 +1,84 @@
+---
+- name: Read automation identity contract properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ item }}"
+      - UserPropGet
+  loop: >-
+    {{ [openvpn_automation_group] +
+       (openvpn_automation_identities | map(attribute='username') | list) }}
+  register: automation_verify_queries
+  changed_when: false
+  no_log: true
+  tags: verify-automation-identities
+
+- name: Build automation identity verification map
+  ansible.builtin.set_fact:
+    automation_verify_properties: >-
+      {{ automation_verify_properties | default({}) |
+         combine({
+           item.item: ((item.stdout | from_json).get(item.item, {}))
+         }) }}
+  loop: "{{ automation_verify_queries.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+  tags: verify-automation-identities
+
+- name: Verify the automation group boundary
+  ansible.builtin.assert:
+    that:
+      - automation_verify_properties[openvpn_automation_group].group_declare | string | lower == 'true'
+      - automation_verify_properties[openvpn_automation_group].type == 'group'
+      - automation_verify_properties[openvpn_automation_group].prop_superuser | string | lower == 'false'
+      - automation_verify_properties[openvpn_automation_group].prop_autologin | string | lower == 'false'
+    fail_msg: Automation group contract is not enforced.
+  no_log: true
+  tags: verify-automation-identities
+
+- name: Verify automation identity boundaries
+  ansible.builtin.assert:
+    that:
+      - automation_verify_properties[item.username].type == 'user_connect'
+      - automation_verify_properties[item.username].user_auth_type == 'local'
+      - automation_verify_properties[item.username].conn_group == openvpn_automation_group
+      - automation_verify_properties[item.username].prop_superuser | string | lower == 'false'
+      - automation_verify_properties[item.username].prop_autologin | string | lower == 'false'
+    fail_msg: Automation identity contract is not enforced.
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  no_log: true
+  tags: verify-automation-identities
+
+- name: Verify automation client logins
+  ansible.builtin.uri:
+    url: >-
+      https://127.0.0.1:{{ openvpn_admin_port
+      }}/api/auth/login/userpassword
+    method: POST
+    headers:
+      Accept: application/json
+    body_format: json
+    body:
+      request_admin: false
+      username: "{{ item.username }}"
+      password: "{{ automation_identity_passwords[item.username] }}"
+    return_content: true
+    status_code: 200
+    timeout: 30
+    use_proxy: false
+    validate_certs: false
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  register: automation_login_results
+  changed_when: false
+  failed_when: >-
+    automation_login_results.status != 200 or
+    ((automation_login_results.json | default({}))
+    .get('auth_token', '') | length) == 0
+  no_log: true
+  tags: verify-automation-identities
