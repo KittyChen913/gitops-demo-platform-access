@@ -28,4 +28,9 @@
 
 ## 驗證
 
-最小驗證為 Terraform fmt/validate、actionlint、ShellCheck、YAML 與 Ansible syntax check。不得在本機驗證時存取 AWS、Linode、OpenVPN 或其他外部 runtime。
+- 依全域「最小必要 Validation」規範，先判定本次變更影響的 Terraform root／module、workflow、Shell execution path、YAML／Ansible configuration 或 shared security contract，再從 Terraform fmt／validate、actionlint、ShellCheck、YAML 與 Ansible syntax check 中選擇能直接驗證風險的最小子集。
+- 只影響單一 root、workflow、script 或 configuration 時，優先使用對應的 targeted validation；不得預設檢查所有 Terraform roots、workflows、scripts、YAML 與 Ansible files。
+- 共用 module、reusable workflow、Shell helper、canonical configuration 或 credential／network security boundary 確實影響多個直接 consumers 時，才擴大驗證範圍，並在執行前說明局部驗證不足的原因。
+- 完整 CI／quality workflow、Terraform plan、apply、Ansible runtime 與外部 integration verification 屬 PR、merge、release、deployment 或獨立驗收 gate，不是每次本機局部修改後的預設 validation。
+- Code Review validation 依全域規則使用固定版本、network-disabled、read-only Docker Container；不得在本機 validation 存取 AWS、Linode、OpenVPN 或其他外部 runtime。
+- dependencies、Container Image 或安全執行條件不可用時，將對應 validation 標示為 `BLOCKED` 或 `NOT RUN`，並說明替代靜態驗證與未取得的信心。
