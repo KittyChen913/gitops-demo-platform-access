@@ -256,7 +256,8 @@ jobs:
           reserved-ip: ${{ steps.bootstrap_outputs.outputs.reserved_ip }}
           admin-port: ${{ steps.bootstrap_outputs.outputs.admin_port }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-          prepare-ansible: "false"
+          fetch-admin-password: "true"
+          prepare-ansible: "true"
 
       - name: "Wait for OpenVPN Marketplace readiness"
         if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
@@ -269,6 +270,35 @@ jobs:
           credentials_path="/home/${ssh_user}/.credentials"
           bash scripts/wait-for-openvpn-marketplace-readiness.sh \
             "${RESERVED_IP}" "${ssh_user}" "${WORK_DIR}/id_ed25519" "${WORK_DIR}/known_hosts" "${credentials_path}"
+
+      - name: "Enforce OpenVPN admin identity before first Configure run"
+        if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        env:
+          INVENTORY: ${{ steps.open_bootstrap.outputs.inventory-path }}
+        run: |
+          set -euo pipefail
+          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-openvpn-server.yml --tags admin-identity
+
+      - name: "Apply OpenVPN admin password before first Configure run"
+        if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        env:
+          INVENTORY: ${{ steps.open_bootstrap.outputs.inventory-path }}
+          WORK_DIR: ${{ steps.open_bootstrap.outputs.work-dir }}
+        run: |
+          set -euo pipefail
+          OPENVPN_ADMIN_PASSWORD="$(cat "${WORK_DIR}/admin_password")" ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/reset-openvpn-admin-password.yml --tags set-password
+
+      - name: "Verify OpenVPN admin/client login before first Configure run"
+        if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        env:
+          INVENTORY: ${{ steps.open_bootstrap.outputs.inventory-path }}
+          WORK_DIR: ${{ steps.open_bootstrap.outputs.work-dir }}
+        run: |
+          set -euo pipefail
+          OPENVPN_ADMIN_PASSWORD="$(cat "${WORK_DIR}/admin_password")" ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/reset-openvpn-admin-password.yml --tags verify-login
 
       - name: "Close BASE access after bootstrap readiness"
         if: always() && inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
