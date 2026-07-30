@@ -31,6 +31,57 @@ api_put_rules() {
       "https://api.linode.com/v4/networking/firewalls/${firewall_id}/rules" >/dev/null
 }
 
+rules_match_file() {
+  local expected_file="$1"
+  local actual_rules
+  local expected_rules
+
+  actual_rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
+  expected_rules="$(jq -S -c '{inbound, inbound_policy, outbound, outbound_policy}' "${expected_file}")"
+  [[ "$(jq -S -c '{inbound, inbound_policy, outbound, outbound_policy}' <<<"${actual_rules}")" == "${expected_rules}" ]]
+}
+
+wait_for_rules_file() {
+  local expected_file="$1"
+  local deadline=$((SECONDS + 120))
+
+  while ((SECONDS < deadline)); do
+    if rules_match_file "${expected_file}"; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+wait_for_no_temporary_runner_access() {
+  local deadline=$((SECONDS + 120))
+  local attempt=0
+  local matching_rule_count
+  local rules
+
+  while ((SECONDS < deadline)); do
+    attempt=$((attempt + 1))
+    rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
+    if ! matching_rule_count="$(jq -er '
+      [.inbound[]? | select(
+        (.label == "temporary-runner-ssh" or .label == "temporary-runner-admin") and
+        .action == "ACCEPT" and
+        (.protocol | ascii_upcase) == "TCP"
+      )] | length
+    ' <<<"${rules}")"; then
+      echo "unable to evaluate existing temporary-runner-* Firewall access" >&2
+      return 2
+    fi
+    if ((matching_rule_count == 0)); then
+      return 0
+    fi
+    echo "等待既有 temporary-runner-* Firewall access 收斂（第 ${attempt} 次；剩餘約 $((deadline - SECONDS)) 秒）..."
+    sleep 5
+  done
+  return 1
+}
+
 if [[ "${mode}" == open ]]; then
   if [[ ! "${admin_port}" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#${admin_port} > 65535)); then
     echo "invalid OpenVPN Admin port" >&2
@@ -38,20 +89,31 @@ if [[ "${mode}" == open ]]; then
   fi
   firewall="$(api_get "/networking/firewalls/${firewall_id}")"
   devices="$(api_get "/networking/firewalls/${firewall_id}/devices")"
-  rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
   jq -e '.status == "enabled"' <<<"${firewall}" >/dev/null
   jq -e --argjson instance_id "${instance_id}" '.data | any(.entity.id == $instance_id and .entity.type == "linode")' <<<"${devices}" >/dev/null
-  jq -e --arg admin_port "${admin_port}" '[.inbound[]? | select(.action == "ACCEPT" and (.protocol | ascii_upcase) == "TCP" and ((.ports | gsub(" "; "") | split(",")) | any(. == "22" or . == $admin_port)))] | length == 0' <<<"${rules}" >/dev/null || {
-    echo "unexpected pre-existing SSH/Admin firewall access" >&2
+  if ! wait_for_no_temporary_runner_access; then
+    echo "unexpected pre-existing temporary-runner-* firewall access remained after timeout" >&2
     exit 1
-  }
+  fi
   umask 077
+  rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
   jq '{inbound, inbound_policy, outbound, outbound_policy}' <<<"${rules}" > "${backup_file}"
   updated="${backup_file}.updated"
   jq --arg cidr "${runner_cidr}" --arg admin_port "${admin_port}" '.inbound += [
     {label:"temporary-runner-ssh",action:"ACCEPT",protocol:"TCP",ports:"22",addresses:{ipv4:[$cidr],ipv6:[]}},
     {label:"temporary-runner-admin",action:"ACCEPT",protocol:"TCP",ports:$admin_port,addresses:{ipv4:[$cidr],ipv6:[]}}
   ]' "${backup_file}" > "${updated}"
+  restore_on_error() {
+    local exit_code=$?
+
+    trap - EXIT
+    rm -f "${updated}"
+    if ! api_put_rules "${backup_file}" || ! wait_for_rules_file "${backup_file}"; then
+      echo "failed to restore the Firewall baseline after opening runner access failed" >&2
+    fi
+    exit "${exit_code}"
+  }
+  trap restore_on_error EXIT
   api_put_rules "${updated}"
   rm -f "${updated}"
 
@@ -88,15 +150,13 @@ if [[ "${mode}" == open ]]; then
     echo "temporary runner /32 Firewall rules did not become readable before timeout" >&2
     exit 1
   }
+  trap - EXIT
   echo "Temporary runner /32 access opened after identity checks."
 else
   [[ -f "${backup_file}" && ! -L "${backup_file}" ]] || { echo "firewall cleanup backup is missing" >&2; exit 1; }
   api_put_rules "${backup_file}"
-  rules="$(api_get "/networking/firewalls/${firewall_id}/rules")"
-  expected_rules="$(jq -S -c '{inbound, inbound_policy, outbound, outbound_policy}' "${backup_file}")"
-  actual_rules="$(jq -S -c '{inbound, inbound_policy, outbound, outbound_policy}' <<<"${rules}")"
-  if [[ "${actual_rules}" != "${expected_rules}" ]]; then
-    echo "runner /32 cleanup did not restore the exact Firewall baseline" >&2
+  if ! wait_for_rules_file "${backup_file}"; then
+    echo "runner /32 cleanup did not restore the exact Firewall baseline before timeout" >&2
     exit 1
   fi
   rm -f "${backup_file}"
