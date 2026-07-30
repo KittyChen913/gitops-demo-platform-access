@@ -1,5 +1,5 @@
 name: "Open BASE access"
-description: "Open a temporary SSH/Admin lease for this runner against the BASE OpenVPN host and prepare an Ansible inventory."
+description: "Open a temporary SSH/Admin lease for this runner against the BASE OpenVPN host."
 
 inputs:
   instance-id:
@@ -21,10 +21,14 @@ inputs:
     description: "Whether to fetch the OpenVPN admin password from SSM."
     required: false
     default: "false"
+  prepare-ansible:
+    description: "Whether to install Ansible and build an inventory."
+    required: false
+    default: "true"
 
 outputs:
   work-dir:
-    description: "Runner-local working directory holding fetched secrets and the inventory."
+    description: "Runner-local working directory holding fetched runtime material."
     value: ${{ steps.workdir.outputs.work_dir }}
   inventory-path:
     description: "Path to the generated Ansible inventory file."
@@ -42,6 +46,7 @@ runs:
         aws-account-id: ${{ inputs.aws-account-id }}
 
     - name: "Install pinned Ansible runtime"
+      if: inputs.prepare-ansible == 'true'
       shell: bash
       run: pipx install ansible-core==2.17.7
 
@@ -120,6 +125,7 @@ runs:
           "$(jq -r '.linode.instance_label' "${config}")" "${ADMIN_PORT}"
 
     - name: "Build Ansible inventory"
+      if: inputs.prepare-ansible == 'true'
       shell: bash
       env:
         WORK_DIR: ${{ steps.workdir.outputs.work_dir }}
