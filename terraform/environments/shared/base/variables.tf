@@ -10,7 +10,7 @@ variable "ansible_ssh_public_key" {
 }
 
 variable "openvpn_bootstrap_http_enabled" {
-  description = "是否暫時開放 TCP/80 供 Marketplace StackScript 內建的 Let's Encrypt certbot 驗證使用；CI 只在偵測到需要 bootstrap 時才會帶 true。"
+  description = "Temporarily allow TCP/80 for the Marketplace StackScript certbot bootstrap."
   type        = bool
   default     = false
 }

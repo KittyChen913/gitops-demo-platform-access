@@ -16,7 +16,7 @@ variable "openvpn_protocol" { type = string }
 variable "tags" { type = list(string) }
 
 variable "bootstrap_http_enabled" {
-  description = "是否暫時開放 TCP/80 供 Marketplace StackScript 內建的 Let's Encrypt certbot 驗證使用；只能在偵測到需要 bootstrap 時暫開，Access Server ready 後必須改回 false 並重新 apply。"
+  description = "Temporarily allow TCP/80 for the Marketplace StackScript certbot bootstrap."
   type        = bool
   default     = false
 }
