@@ -104,7 +104,6 @@ runs:
         set -euo pipefail
         LINODE_TOKEN="$(cat "${WORK_DIR}/linode_token")" bash scripts/manage-runner-access.sh open \
           "${FIREWALL_ID}" "${INSTANCE_ID}" "${RUNNER_CIDR}" "${WORK_DIR}/firewall-baseline.json" "${ADMIN_PORT}"
-        touch "${WORK_DIR}/firewall-opened.marker"
 
     - name: "Attest SSH host key"
       shell: bash

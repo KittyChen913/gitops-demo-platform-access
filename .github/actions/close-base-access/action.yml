@@ -28,7 +28,7 @@ runs:
         INSTANCE_ID: ${{ inputs.instance-id }}
       run: |
         set -euo pipefail
-        if [[ -f "${WORK_DIR}/firewall-opened.marker" ]]; then
+        if [[ -f "${WORK_DIR}/firewall-baseline.json" ]]; then
           LINODE_TOKEN="$(cat "${WORK_DIR}/linode_token")" bash scripts/manage-runner-access.sh cleanup \
             "${FIREWALL_ID}" "${INSTANCE_ID}" "${RUNNER_CIDR}" "${WORK_DIR}/firewall-baseline.json"
         fi
