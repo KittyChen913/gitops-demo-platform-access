@@ -74,7 +74,6 @@ jobs:
           reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
           admin-port: ${{ needs.resolve-base.outputs.admin_port }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
-          fetch-admin-password: "true"
 
       - name: "Configure IPv4 forwarding"
         env:
@@ -115,32 +114,6 @@ jobs:
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-openvpn-server.yml --tags access-groups
-
-      - name: "Enforce admin identity"
-        env:
-          INVENTORY: ${{ steps.open.outputs.inventory-path }}
-        run: |
-          set -euo pipefail
-          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-openvpn-server.yml --tags admin-identity
-
-      - name: "Set OpenVPN admin password"
-        env:
-          INVENTORY: ${{ steps.open.outputs.inventory-path }}
-          WORK_DIR: ${{ steps.open.outputs.work-dir }}
-        run: |
-          set -euo pipefail
-          OPENVPN_ADMIN_PASSWORD="$(cat "${WORK_DIR}/admin_password")" ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/reset-openvpn-admin-password.yml --tags set-password
-
-      - name: "Verify admin/client login"
-        env:
-          INVENTORY: ${{ steps.open.outputs.inventory-path }}
-          WORK_DIR: ${{ steps.open.outputs.work-dir }}
-        run: |
-          set -euo pipefail
-          OPENVPN_ADMIN_PASSWORD="$(cat "${WORK_DIR}/admin_password")" ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/reset-openvpn-admin-password.yml --tags verify-login
 
       - name: "Remove legacy firewall rules"
         env:
