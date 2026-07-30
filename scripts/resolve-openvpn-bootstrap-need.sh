@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 
 # 判斷 targeted plan 是否顯示 OpenVPN Linode 需要建立或 replace，
-# 藉此決定這次 apply 是否要暫時開放 Marketplace certbot 所需的 TCP/80。
+# 藉此決定候選 Plan 是否帶入 Marketplace certbot 所需的 TCP/80。
 # 對 module.openvpn.linode_instance.openvpn 做 -target plan 就能同時涵蓋
 # 「resource 尚未存在」與「resource 需要 replace」兩種情況：
 # 兩者在 targeted plan 裡都會落在 actions 包含 create。
+# 完整 Apply Plan 仍會由 policy 禁止 replacement，只有 create 能實際暫開。
 set -euo pipefail
 
 readonly OPENVPN_INSTANCE_ADDRESS='module.openvpn.linode_instance.openvpn'

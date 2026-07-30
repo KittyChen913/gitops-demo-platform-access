@@ -23,7 +23,7 @@ jobs:
       id-token: write
     outputs:
       plan_sha256: ${{ steps.verify_plan.outputs.plan_sha256 }}
-      bootstrap_needed: ${{ steps.detect_bootstrap.outputs.needed }}
+      bootstrap_needed: ${{ steps.create_plan.outputs.bootstrap_needed }}
     steps:
       - name: "Checkout"
         uses: actions/checkout@v7
@@ -78,37 +78,10 @@ jobs:
             printf 'PLAN_FILE=%s\n' "${bundle}/terraform.tfplan"
           } >> "${GITHUB_ENV}"
 
-      - name: "Detect OpenVPN bootstrap requirement"
-        id: detect_bootstrap
-        if: inputs.deployment == 'base'
-        run: |
-          set -euo pipefail
-          config="${GITHUB_WORKSPACE}/config/shared.json"
-          linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
-          contact_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_contact_email' "${config}")"
-          public_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"
-          linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
-          contact_email="$(aws ssm get-parameter --name "${contact_path}" --with-decryption --query Parameter.Value --output text)"
-          ssh_public_key="$(aws ssm get-parameter --name "${public_key_path}" --query Parameter.Value --output text)"
-          echo "::add-mask::${linode_token}"
-          echo "::add-mask::${contact_email}"
-
-          detect_plan="${RUNNER_TEMP}/openvpn-bootstrap-detect.tfplan"
-          detect_json="${RUNNER_TEMP}/openvpn-bootstrap-detect.json"
-          LINODE_TOKEN="${linode_token}" \
-            TF_VAR_openvpn_contact_email="${contact_email}" \
-            TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
-            terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false \
-              -target='module.openvpn.linode_instance.openvpn' -out="${detect_plan}"
-          terraform -chdir="${TF_ROOT}" show -json "${detect_plan}" > "${detect_json}"
-          bootstrap_needed="$(bash scripts/resolve-openvpn-bootstrap-need.sh "${detect_json}")"
-          printf 'needed=%s\n' "${bootstrap_needed}" >> "${GITHUB_OUTPUT}"
-          rm -f "${detect_plan}" "${detect_json}"
-
-      - name: "Terraform plan"
+      - name: "Create Terraform plan"
+        id: create_plan
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
-          BOOTSTRAP_NEEDED: ${{ steps.detect_bootstrap.outputs.needed }}
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
@@ -122,12 +95,26 @@ jobs:
             ssh_public_key="$(aws ssm get-parameter --name "${public_key_path}" --query Parameter.Value --output text)"
             echo "::add-mask::${linode_token}"
             echo "::add-mask::${contact_email}"
+
+            detect_plan="${RUNNER_TEMP}/openvpn-bootstrap-detect.tfplan"
+            detect_json="${RUNNER_TEMP}/openvpn-bootstrap-detect.json"
+            trap 'rm -f "${detect_plan}" "${detect_json}"' EXIT
             LINODE_TOKEN="${linode_token}" \
               TF_VAR_openvpn_contact_email="${contact_email}" \
               TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
-              TF_VAR_openvpn_bootstrap_http_enabled="${BOOTSTRAP_NEEDED}" \
+              terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false \
+                -target='module.openvpn.linode_instance.openvpn' -out="${detect_plan}"
+            terraform -chdir="${TF_ROOT}" show -json "${detect_plan}" > "${detect_json}"
+            bootstrap_needed="$(bash scripts/resolve-openvpn-bootstrap-need.sh "${detect_json}")"
+            printf 'bootstrap_needed=%s\n' "${bootstrap_needed}" >> "${GITHUB_OUTPUT}"
+
+            LINODE_TOKEN="${linode_token}" \
+              TF_VAR_openvpn_contact_email="${contact_email}" \
+              TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
+              TF_VAR_openvpn_bootstrap_http_enabled="${bootstrap_needed}" \
               terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${PLAN_FILE}"
           else
+            printf 'bootstrap_needed=false\n' >> "${GITHUB_OUTPUT}"
             terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${PLAN_FILE}"
           fi
 
@@ -269,6 +256,7 @@ jobs:
           reserved-ip: ${{ steps.bootstrap_outputs.outputs.reserved_ip }}
           admin-port: ${{ steps.bootstrap_outputs.outputs.admin_port }}
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+          prepare-ansible: "false"
 
       - name: "Wait for OpenVPN Marketplace readiness"
         if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
@@ -291,8 +279,52 @@ jobs:
           work-dir: ${{ steps.open_bootstrap.outputs.work-dir }}
           runner-cidr: ${{ steps.open_bootstrap.outputs.runner-cidr }}
 
-      - name: "Ensure OpenVPN bootstrap TCP/80 is closed"
-        if: always() && inputs.deployment == 'base'
+      - name: "Remove runner apply bundle"
+        if: always()
+        run: |
+          rm -rf \
+            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-plan" \
+            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-work"
+
+  reconcile-bootstrap-http:
+    name: "Reconcile OpenVPN bootstrap HTTP"
+    needs:
+      - plan
+      - apply-tagged-plan
+    if: always() && inputs.deployment == 'base'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Setup Terraform"
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.13.5"
+
+      - name: "Configure AWS credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: "Terraform init"
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/platform-access-base-bootstrap-http"
+          mkdir -p "${work}"
+          backend_file="${work}/base-backend.hcl"
+          root="$(bash scripts/resolve-terraform-backend.sh base "${backend_file}")"
+          terraform -chdir="${root}" init -input=false -lockfile=readonly -backend-config="${backend_file}"
+
+          {
+            printf 'TF_ROOT=%s\n' "${root}"
+            printf 'CLEANUP_WORK=%s\n' "${work}"
+          } >> "${GITHUB_ENV}"
+
+      - name: "Close OpenVPN bootstrap HTTP"
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
@@ -305,20 +337,17 @@ jobs:
           echo "::add-mask::${linode_token}"
           echo "::add-mask::${contact_email}"
 
-          close_plan="${RUNNER_TEMP}/openvpn-bootstrap-close.tfplan"
-          close_json="${RUNNER_TEMP}/openvpn-bootstrap-close.json"
+          close_plan="${CLEANUP_WORK}/openvpn-bootstrap-close.tfplan"
+          close_json="${CLEANUP_WORK}/openvpn-bootstrap-close.json"
           LINODE_TOKEN="${linode_token}" \
             TF_VAR_openvpn_contact_email="${contact_email}" \
             TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
-            terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${close_plan}"
+            terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false \
+              -target='module.openvpn.linode_firewall.openvpn' -out="${close_plan}"
           terraform -chdir="${TF_ROOT}" show -json "${close_plan}" > "${close_json}"
-          bash scripts/verify-plan-policy.sh "${close_json}" base apply
+          bash scripts/verify-plan-policy.sh "${close_json}" base bootstrap-close
           LINODE_TOKEN="${linode_token}" terraform -chdir="${TF_ROOT}" apply -input=false "${close_plan}"
-          rm -f "${close_plan}" "${close_json}"
 
-      - name: "Remove runner apply bundle"
+      - name: "Remove bootstrap HTTP cleanup bundle"
         if: always()
-        run: |
-          rm -rf \
-            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-plan" \
-            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-work"
+        run: rm -rf "${RUNNER_TEMP}/platform-access-base-bootstrap-http"

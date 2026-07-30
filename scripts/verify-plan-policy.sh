@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 # Apply Plan 只允許 create／update，Destroy Plan 只允許 delete；
+# bootstrap-close Plan 只能對 OpenVPN Firewall 執行 update／no-op。
 # replacement 與 Terraform 未知 action 一律 fail closed。
 set -euo pipefail
 
@@ -9,7 +10,7 @@ deployment="${2:-}"
 operation="${3:-}"
 
 if [[ -z "${plan_json}" || ! -f "${plan_json}" || -L "${plan_json}" ]]; then
-  echo "usage: verify-plan-policy.sh <terraform-plan.json> <credential-bootstrap|base> <apply|destroy>" >&2
+  echo "usage: verify-plan-policy.sh <terraform-plan.json> <credential-bootstrap|base> <apply|destroy|bootstrap-close>" >&2
   exit 2
 fi
 case "${deployment}" in
@@ -18,6 +19,12 @@ case "${deployment}" in
 esac
 case "${operation}" in
   apply|destroy) ;;
+  bootstrap-close)
+    if [[ "${deployment}" != "base" ]]; then
+      echo "Bootstrap-close plans are only supported for BASE." >&2
+      exit 2
+    fi
+    ;;
   *) echo "The Terraform plan operation is unsupported." >&2; exit 2 ;;
 esac
 if ! jq -e '
@@ -50,16 +57,49 @@ unexpected_action_count="$(jq '[
 printf 'Terraform resource actions: deployment=%s operation=%s create=%s update=%s delete=%s replace=%s unexpected=%s\n' \
   "${deployment}" "${operation}" "${create_count}" "${update_count}" "${delete_count}" "${replace_count}" "${unexpected_action_count}"
 
-if [[ "${operation}" == "apply" ]]; then
-  if ((delete_count != 0 || replace_count != 0 || unexpected_action_count != 0)); then
-    echo "Apply plans may only create or update resources; delete and replacement are forbidden." >&2
-    exit 1
-  fi
-else
-  if ((create_count != 0 || update_count != 0 || replace_count != 0 || unexpected_action_count != 0)); then
-    echo "Destroy plans may only delete resources; create, update and replacement are forbidden." >&2
-    exit 1
-  fi
-fi
+case "${operation}" in
+  apply)
+    if ((delete_count != 0 || replace_count != 0 || unexpected_action_count != 0)); then
+      echo "Apply plans may only create or update resources; delete and replacement are forbidden." >&2
+      exit 1
+    fi
+    ;;
+  destroy)
+    if ((create_count != 0 || update_count != 0 || replace_count != 0 || unexpected_action_count != 0)); then
+      echo "Destroy plans may only delete resources; create, update and replacement are forbidden." >&2
+      exit 1
+    fi
+    ;;
+  bootstrap-close)
+    if ! jq -e '
+      all(
+        (.resource_changes // [])[]?;
+        .address == "module.openvpn.linode_firewall.openvpn" and
+        (.change.actions == ["no-op"] or .change.actions == ["update"])
+      )
+    ' "${plan_json}" >/dev/null; then
+      echo "Bootstrap-close plans may only update the OpenVPN Firewall." >&2
+      exit 1
+    fi
+    if ! jq -e '
+      [
+        .planned_values.root_module
+        | .. | objects
+        | .resources? // empty
+        | .[]
+        | select(.address == "module.openvpn.linode_firewall.openvpn")
+      ] as $firewalls
+      | .variables.openvpn_bootstrap_http_enabled.value == false
+        and ($firewalls | length) == 1
+        and all(
+          ($firewalls[0].values.inbound // [])[];
+          (.label // "") != "allow-certbot-bootstrap"
+        )
+    ' "${plan_json}" >/dev/null; then
+      echo "Bootstrap-close plans must disable HTTP and remove the certbot Firewall rule." >&2
+      exit 1
+    fi
+    ;;
+esac
 
 echo "Approved ${deployment} ${operation} plan accepted."
