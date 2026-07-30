@@ -27,6 +27,18 @@ resource "linode_firewall" "openvpn" {
     ports    = tostring(var.openvpn_port)
     ipv4     = ["0.0.0.0/0"]
   }
+
+  dynamic "inbound" {
+    for_each = var.bootstrap_http_enabled ? [1] : []
+
+    content {
+      label    = "allow-certbot-bootstrap"
+      action   = "ACCEPT"
+      protocol = "TCP"
+      ports    = "80"
+      ipv4     = ["0.0.0.0/0"]
+    }
+  }
 }
 
 resource "linode_instance" "openvpn" {

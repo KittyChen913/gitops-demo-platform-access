@@ -23,6 +23,7 @@ jobs:
       id-token: write
     outputs:
       plan_sha256: ${{ steps.verify_plan.outputs.plan_sha256 }}
+      bootstrap_needed: ${{ steps.detect_bootstrap.outputs.needed }}
     steps:
       - name: "Checkout"
         uses: actions/checkout@v7
@@ -77,9 +78,37 @@ jobs:
             printf 'PLAN_FILE=%s\n' "${bundle}/terraform.tfplan"
           } >> "${GITHUB_ENV}"
 
+      - name: "Detect OpenVPN bootstrap requirement"
+        id: detect_bootstrap
+        if: inputs.deployment == 'base'
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
+          contact_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_contact_email' "${config}")"
+          public_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"
+          linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
+          contact_email="$(aws ssm get-parameter --name "${contact_path}" --with-decryption --query Parameter.Value --output text)"
+          ssh_public_key="$(aws ssm get-parameter --name "${public_key_path}" --query Parameter.Value --output text)"
+          echo "::add-mask::${linode_token}"
+          echo "::add-mask::${contact_email}"
+
+          detect_plan="${RUNNER_TEMP}/openvpn-bootstrap-detect.tfplan"
+          detect_json="${RUNNER_TEMP}/openvpn-bootstrap-detect.json"
+          LINODE_TOKEN="${linode_token}" \
+            TF_VAR_openvpn_contact_email="${contact_email}" \
+            TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
+            terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false \
+              -target='module.openvpn.linode_instance.openvpn' -out="${detect_plan}"
+          terraform -chdir="${TF_ROOT}" show -json "${detect_plan}" > "${detect_json}"
+          bootstrap_needed="$(bash scripts/resolve-openvpn-bootstrap-need.sh "${detect_json}")"
+          printf 'needed=%s\n' "${bootstrap_needed}" >> "${GITHUB_OUTPUT}"
+          rm -f "${detect_plan}" "${detect_json}"
+
       - name: "Terraform plan"
         env:
           DEPLOYMENT: ${{ inputs.deployment }}
+          BOOTSTRAP_NEEDED: ${{ steps.detect_bootstrap.outputs.needed }}
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
@@ -96,6 +125,7 @@ jobs:
             LINODE_TOKEN="${linode_token}" \
               TF_VAR_openvpn_contact_email="${contact_email}" \
               TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
+              TF_VAR_openvpn_bootstrap_http_enabled="${BOOTSTRAP_NEEDED}" \
               terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${PLAN_FILE}"
           else
             terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${PLAN_FILE}"
@@ -216,6 +246,75 @@ jobs:
           else
             terraform -chdir="${TF_ROOT}" apply -input=false "${PLAN_FILE}"
           fi
+
+      - name: "Read BASE outputs for bootstrap readiness"
+        id: bootstrap_outputs
+        if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        run: |
+          set -euo pipefail
+          {
+            printf 'instance_id=%s\n' "$(terraform -chdir="${TF_ROOT}" output -raw openvpn_instance_id)"
+            printf 'firewall_id=%s\n' "$(terraform -chdir="${TF_ROOT}" output -raw openvpn_firewall_id)"
+            printf 'reserved_ip=%s\n' "$(terraform -chdir="${TF_ROOT}" output -raw openvpn_reserved_ipv4)"
+            printf 'admin_port=%s\n' "$(jq -r '.linode.admin_port' config/shared.json)"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: "Open BASE access for bootstrap readiness"
+        id: open_bootstrap
+        if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        uses: ./.github/actions/open-base-access
+        with:
+          instance-id: ${{ steps.bootstrap_outputs.outputs.instance_id }}
+          firewall-id: ${{ steps.bootstrap_outputs.outputs.firewall_id }}
+          reserved-ip: ${{ steps.bootstrap_outputs.outputs.reserved_ip }}
+          admin-port: ${{ steps.bootstrap_outputs.outputs.admin_port }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: "Wait for OpenVPN Marketplace readiness"
+        if: inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        env:
+          RESERVED_IP: ${{ steps.bootstrap_outputs.outputs.reserved_ip }}
+          WORK_DIR: ${{ steps.open_bootstrap.outputs.work-dir }}
+        run: |
+          set -euo pipefail
+          ssh_user="$(jq -r '.linode.automation_username' config/shared.json)"
+          credentials_path="/home/${ssh_user}/.credentials"
+          bash scripts/wait-for-openvpn-marketplace-readiness.sh \
+            "${RESERVED_IP}" "${ssh_user}" "${WORK_DIR}/id_ed25519" "${WORK_DIR}/known_hosts" "${credentials_path}"
+
+      - name: "Close BASE access after bootstrap readiness"
+        if: always() && inputs.deployment == 'base' && needs.plan.outputs.bootstrap_needed == 'true'
+        uses: ./.github/actions/close-base-access
+        with:
+          firewall-id: ${{ steps.bootstrap_outputs.outputs.firewall_id }}
+          instance-id: ${{ steps.bootstrap_outputs.outputs.instance_id }}
+          work-dir: ${{ steps.open_bootstrap.outputs.work-dir }}
+          runner-cidr: ${{ steps.open_bootstrap.outputs.runner-cidr }}
+
+      - name: "Ensure OpenVPN bootstrap TCP/80 is closed"
+        if: always() && inputs.deployment == 'base'
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          linode_path="$(jq -r '.aws.ssm_parameter_paths.linode_token' "${config}")"
+          contact_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_contact_email' "${config}")"
+          public_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_public_key' "${config}")"
+          linode_token="$(aws ssm get-parameter --name "${linode_path}" --with-decryption --query Parameter.Value --output text)"
+          contact_email="$(aws ssm get-parameter --name "${contact_path}" --with-decryption --query Parameter.Value --output text)"
+          ssh_public_key="$(aws ssm get-parameter --name "${public_key_path}" --query Parameter.Value --output text)"
+          echo "::add-mask::${linode_token}"
+          echo "::add-mask::${contact_email}"
+
+          close_plan="${RUNNER_TEMP}/openvpn-bootstrap-close.tfplan"
+          close_json="${RUNNER_TEMP}/openvpn-bootstrap-close.json"
+          LINODE_TOKEN="${linode_token}" \
+            TF_VAR_openvpn_contact_email="${contact_email}" \
+            TF_VAR_ansible_ssh_public_key="${ssh_public_key}" \
+            terraform -chdir="${TF_ROOT}" plan -input=false -refresh=true -lock=false -out="${close_plan}"
+          terraform -chdir="${TF_ROOT}" show -json "${close_plan}" > "${close_json}"
+          bash scripts/verify-plan-policy.sh "${close_json}" base apply
+          LINODE_TOKEN="${linode_token}" terraform -chdir="${TF_ROOT}" apply -input=false "${close_plan}"
+          rm -f "${close_plan}" "${close_json}"
 
       - name: "Remove runner apply bundle"
         if: always()

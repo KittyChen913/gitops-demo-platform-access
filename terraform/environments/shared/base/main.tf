@@ -35,6 +35,8 @@ module "openvpn" {
   openvpn_port        = local.deployment_config.linode.openvpn_port
   openvpn_protocol    = local.deployment_config.linode.openvpn_protocol
   tags                = ["gitops-demo", "platform-access", "openvpn", "shared"]
+
+  bootstrap_http_enabled = var.openvpn_bootstrap_http_enabled
 }
 
 resource "aws_ssm_parameter" "vpn_public_egress_ip" {
