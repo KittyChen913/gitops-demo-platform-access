@@ -201,15 +201,26 @@ jobs:
             exit 1
           fi
 
-          host_key_path="$(jq -r '.aws.ssm_parameter_paths.openvpn_ssh_host_key' "${config}")"
-          host_key_error="${work}/host-key-cleanup.error"
-          if aws ssm get-parameter --name "${host_key_path}" --query Parameter.Name --output text >/dev/null 2>"${host_key_error}"; then
-            aws ssm delete-parameter --name "${host_key_path}" >/dev/null
-          elif ! grep -q 'ParameterNotFound' "${host_key_error}"; then
-            echo "Unable to verify or remove the retired OpenVPN host-key pin." >&2
-            exit 1
-          fi
-          rm -f "${host_key_error}"
+          runtime_cleanup_error="${work}/runtime-parameter-cleanup.error"
+          mapfile -t runtime_parameter_paths < <(
+            {
+              jq -r '.aws.ssm_parameter_paths.openvpn_ssh_host_key' "${config}"
+              jq -r '.identities[].profile_ssm_path' config/automation-identities.json
+            } | sort -u
+          )
+          for runtime_parameter_path in "${runtime_parameter_paths[@]}"; do
+            [[ "${runtime_parameter_path}" == /gitops/platform-access/* ]]
+            if aws ssm get-parameter \
+              --name "${runtime_parameter_path}" \
+              --query Parameter.Name \
+              --output text >/dev/null 2>"${runtime_cleanup_error}"; then
+              aws ssm delete-parameter --name "${runtime_parameter_path}" >/dev/null
+            elif ! grep -q 'ParameterNotFound' "${runtime_cleanup_error}"; then
+              echo "Unable to verify or remove a retired OpenVPN runtime parameter." >&2
+              exit 1
+            fi
+            rm -f "${runtime_cleanup_error}"
+          done
 
           credential_root="$(prepare_destroy_plan credential-bootstrap)"
           terraform -chdir="${credential_root}" apply -input=false "${bundle}/credential-bootstrap/terraform.tfplan"
