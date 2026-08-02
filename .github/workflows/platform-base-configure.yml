@@ -175,6 +175,40 @@ jobs:
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml \
               --tags verify-automation-identities
 
+      # verify-automation-identities 只查 sacli 屬性值，沒真的開過 tunnel。
+      # 這裡挑 ci-cluster 代表三個身份跑一次端對端驗證；目標用
+      # internal_dns_ip:admin_port，只驗證 tunnel 本身，不代表下游可達性。
+      - name: "Resolve automation VPN test target"
+        id: automation-vpn-test-target
+        run: |
+          set -euo pipefail
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          contract="${GITHUB_WORKSPACE}/config/automation-identities.json"
+          test_identity="ci-cluster"
+          dns_target="$(jq -r '.network.internal_dns_ip' "${config}"):$(jq -r '.linode.admin_port' "${config}")"
+          {
+            echo "identity=${test_identity}"
+            echo "profile_parameter=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .profile_ssm_path' "${contract}")"
+            echo "password_parameter=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .password_ssm_path' "${contract}")"
+            echo "target=${dns_target}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: "Open automation VPN tunnel [ci-cluster]"
+        id: automation-vpn-verify
+        uses: ./.github/actions/open-automation-vpn-tunnel
+        with:
+          identity: ${{ steps.automation-vpn-test-target.outputs.identity }}
+          profile-ssm-parameter: ${{ steps.automation-vpn-test-target.outputs.profile_parameter }}
+          password-ssm-parameter: ${{ steps.automation-vpn-test-target.outputs.password_parameter }}
+          route-targets: ${{ steps.automation-vpn-test-target.outputs.target }}
+          health-targets: ${{ steps.automation-vpn-test-target.outputs.target }}
+
+      - name: "Close automation VPN tunnel [ci-cluster]"
+        if: always()
+        uses: ./.github/actions/close-automation-vpn-tunnel
+        with:
+          state-directory: ${{ steps.automation-vpn-verify.outputs['state-directory'] }}
+
       - name: "Close BASE access"
         if: always()
         uses: ./.github/actions/close-base-access
