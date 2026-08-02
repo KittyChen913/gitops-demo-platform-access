@@ -9,6 +9,22 @@ locals {
     for identity in local.automation_identity_contract.identities :
     identity.username => identity
   }
+  automation_identity_cidr_range = {
+    first = sum([
+      for index, octet in split(".", cidrhost(local.deployment_config.network.automation_identity_cidr, 0)) :
+      tonumber(octet) * pow(256, 3 - index)
+    ])
+    last = sum([
+      for index, octet in split(".", cidrhost(local.deployment_config.network.automation_identity_cidr, -1)) :
+      tonumber(octet) * pow(256, 3 - index)
+    ])
+  }
+  automation_identity_ip_numbers = {
+    for username, identity in local.automation_identities : username => sum([
+      for index, octet in split(".", cidrhost("${identity.conn_ip}/32", 0)) :
+      tonumber(octet) * pow(256, 3 - index)
+    ])
+  }
 }
 
 ephemeral "random_password" "openvpn_admin" {
@@ -80,8 +96,13 @@ check "credential_bootstrap_contract" {
         startswith(identity.profile_ssm_path, "/gitops/platform-access/automation/${username}/") &&
         startswith(identity.password_ssm_path, "/gitops/platform-access/automation/${username}/") &&
         endswith(identity.profile_ssm_path, "/PROFILE") &&
-        endswith(identity.password_ssm_path, "/PASSWORD")
+        endswith(identity.password_ssm_path, "/PASSWORD") &&
+        local.automation_identity_ip_numbers[username] > local.automation_identity_cidr_range.first + 1 &&
+        local.automation_identity_ip_numbers[username] < local.automation_identity_cidr_range.last - 1
       ]) &&
+      length(distinct([
+        for identity in values(local.automation_identities) : identity.conn_ip
+      ])) == length(local.automation_identities) &&
       startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_admin_password, "/gitops/platform-access/") &&
       startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64, "/gitops/platform-access/") &&
       startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_public_key, "/gitops/platform-access/")

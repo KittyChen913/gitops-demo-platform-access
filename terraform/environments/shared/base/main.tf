@@ -1,11 +1,40 @@
 locals {
   deployment_config = jsondecode(file("${path.module}/../../../../config/shared.json"))
+  vpn_address_cidrs = [
+    local.deployment_config.network.vpn_client_cidr,
+    local.deployment_config.network.vpn_group_default_cidr,
+    local.deployment_config.network.automation_identity_cidr,
+  ]
+  vpn_address_ranges = [
+    for cidr in local.vpn_address_cidrs : {
+      first = sum([
+        for index, octet in split(".", cidrhost(cidr, 0)) :
+        tonumber(octet) * pow(256, 3 - index)
+      ])
+      last = sum([
+        for index, octet in split(".", cidrhost(cidr, -1)) :
+        tonumber(octet) * pow(256, 3 - index)
+      ])
+    }
+  ]
 }
 
 check "network_contract" {
   assert {
     condition     = local.deployment_config.network.internal_dns_ip == cidrhost(local.deployment_config.network.vpn_client_cidr, 1)
     error_message = "The internal DNS address must be the first host in the VPN client CIDR."
+  }
+
+  assert {
+    condition = alltrue(flatten([
+      for left_index, left_range in local.vpn_address_ranges : [
+        for right_index, right_range in local.vpn_address_ranges :
+        left_index == right_index ||
+        left_range.last < right_range.first ||
+        right_range.last < left_range.first
+      ]
+    ]))
+    error_message = "The dynamic, group-default, and automation VPN CIDRs must not overlap."
   }
 }
 

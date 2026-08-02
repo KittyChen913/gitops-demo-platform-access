@@ -73,6 +73,7 @@ trap cleanup_on_error EXIT
 identity="${AUTOMATION_VPN_IDENTITY:-}"
 profile_path="${VPN_PROFILE_PATH:-}"
 password_path="${VPN_PASSWORD_PATH:-}"
+expected_tunnel_ip="${VPN_EXPECTED_TUNNEL_IP:-}"
 route_targets="${VPN_ROUTE_TARGETS:-}"
 health_targets="${VPN_HEALTH_TARGETS:-}"
 
@@ -80,6 +81,11 @@ health_targets="${VPN_HEALTH_TARGETS:-}"
   echo "invalid automation VPN identity" >&2
   exit 2
 }
+if [[ -n "${expected_tunnel_ip}" ]] &&
+  [[ ! "${expected_tunnel_ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  echo "invalid expected tunnel IPv4 address" >&2
+  exit 2
+fi
 for required_file in "${profile_path}" "${password_path}"; do
   [[ -f "${required_file}" && ! -L "${required_file}" ]] || {
     echo "automation VPN credential file is missing" >&2
@@ -194,6 +200,17 @@ while IFS= read -r route_ip; do
   tunnel_interface="${tunnel_interface:-${route_interface}}"
 done < "${routes_file}"
 printf '%s\n' "${tunnel_interface}" > "${state_directory_real}/tunnel-interface"
+
+if [[ -n "${expected_tunnel_ip}" ]]; then
+  actual_tunnel_ip="$(
+    ip -4 -o address show dev "${tunnel_interface}" |
+      awk 'NR == 1 {sub(/\/.*/, "", $4); print $4}'
+  )"
+  [[ "${actual_tunnel_ip}" == "${expected_tunnel_ip}" ]] || {
+    echo "automation VPN tunnel did not receive the expected static IPv4 address" >&2
+    exit 1
+  }
+fi
 
 while IFS= read -r health_target; do
   health_target="${health_target#"${health_target%%[![:space:]]*}"}"

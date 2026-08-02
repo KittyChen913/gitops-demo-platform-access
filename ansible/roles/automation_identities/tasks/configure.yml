@@ -40,19 +40,11 @@
     (item.value | string | lower)
   notify: Apply Access Server changes
 
-# ci-automation 用專屬的 group subnet（見 config/shared.json 的
-# network.automation_identity_cidr），跟 dev-ops/prod-ops/platform-ops 等一般
-# VPN User共用的 vpn_client_cidr 動態 pool分開。沒有這個 group subnet，底下的
-# conn_ip 靜態指派不會生效，AS 只會從全域動態 pool 分配位址（見官方文件
-# tutorial--user-and-group-properties-cli.html「Groups need a subnet to work
-# with」）。這個 subnet 只有 3 個自動化身份會用到，host_firewall／
-# vpn_routing 的 MASQUERADE／forward 規則改成只放行這個 CIDR，藉此把三個
-# 自動化身份跟一般人員 VPN User 的存取範圍分開，縮小 5.x
-# 節提到的「整個 tunnel CIDR to any」風險。
-# 注意：172.27.240.0/28 是否跟 Linode VPC／LKE Pod／Service CIDR 等其他網段
-# 衝突，本機無法驗證，需要在實際部署（terraform apply + ansible 實跑）時
-# 確認一次；若衝突，只需要改 config/shared.json 的
-# network.automation_identity_cidr 為其他未使用的 /28（或更大）區段即可。
+# ci-automation 使用 config/shared.json 中獨立的 static group subnet；BASE
+# Terraform contract 會先確認它不與一般 client dynamic pool 或 group default
+# pool 重疊。固定 conn_ip 讓 host firewall 與 VPN egress NAT 只放行自動化身份，
+# 不把一般 VPN User 納入 public egress。Linode VPC、LKE Pod／Service CIDR 與
+# client-side network 等 runtime 範圍仍須在部署前確認不重疊。
 - name: Enforce the automation group static IP subnet
   ansible.builtin.command:
     argv:
@@ -127,7 +119,7 @@
 
 # 每個自動化身份指派固定 conn_ip（來自 config/automation-identities.json 的
 # conn_ip 欄位，落在上面設定的 openvpn_automation_cidr 之內）。有了固定 IP，
-# host_firewall／vpn_routing 才能用「這個 /28」而不是整個 openvpn_tunnel_cidr
+# host_firewall／vpn_routing 才能用專屬 subnet 而不是一般 client pools
 # 來限制 forward／MASQUERADE 範圍，避免一般 VPN User 的連線也被納入
 # public egress NAT 的放行範圍。
 - name: Enforce automation identity static IP addresses

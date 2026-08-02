@@ -51,7 +51,7 @@
   notify: Reload UFW
   tags: apply-firewall-rules
 
-- name: Allow VPN clients to query tunnel DNS
+- name: Allow every VPN address pool to query tunnel DNS
   ansible.builtin.command:
     argv:
       - ufw
@@ -60,20 +60,22 @@
       - "on"
       - "{{ openvpn_tunnel_interface }}"
       - from
-      - "{{ openvpn_tunnel_cidr }}"
+      - "{{ item.0 }}"
       - to
       - "{{ internal_dns_server_ip }}"
       - port
       - "53"
       - proto
-      - "{{ item }}"
-  loop: [udp, tcp]
+      - "{{ item.1 }}"
+  loop: "{{ openvpn_client_cidrs | product(['udp', 'tcp']) | list }}"
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1 }}"
   register: ufw_dns_allow
   changed_when: "'Skipping adding existing rule' not in ufw_dns_allow.stdout"
   notify: Reload UFW
   tags: apply-firewall-rules
 
-- name: Allow VPN clients to reach the Access Server client API
+- name: Allow every VPN address pool to reach the Access Server client API
   ansible.builtin.command:
     argv:
       - ufw
@@ -82,13 +84,16 @@
       - "on"
       - "{{ openvpn_tunnel_interface }}"
       - from
-      - "{{ openvpn_tunnel_cidr }}"
+      - "{{ item }}"
       - to
       - "{{ internal_dns_server_ip }}"
       - port
       - "{{ openvpn_admin_port }}"
       - proto
       - tcp
+  loop: "{{ openvpn_client_cidrs }}"
+  loop_control:
+    label: "{{ item }}"
   register: ufw_vpn_client_api_allow
   changed_when: >-
     'Skipping adding existing rule' not in ufw_vpn_client_api_allow.stdout

@@ -190,6 +190,7 @@ jobs:
             echo "identity=${test_identity}"
             echo "profile_parameter=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .profile_ssm_path' "${contract}")"
             echo "password_parameter=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .password_ssm_path' "${contract}")"
+            echo "expected_tunnel_ip=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .conn_ip' "${contract}")"
             echo "target=${dns_target}"
           } >> "${GITHUB_OUTPUT}"
 
@@ -200,6 +201,7 @@ jobs:
           identity: ${{ steps.automation-vpn-test-target.outputs.identity }}
           profile-ssm-parameter: ${{ steps.automation-vpn-test-target.outputs.profile_parameter }}
           password-ssm-parameter: ${{ steps.automation-vpn-test-target.outputs.password_parameter }}
+          expected-tunnel-ip: ${{ steps.automation-vpn-test-target.outputs.expected_tunnel_ip }}
           route-targets: ${{ steps.automation-vpn-test-target.outputs.target }}
           health-targets: ${{ steps.automation-vpn-test-target.outputs.target }}
 

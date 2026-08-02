@@ -16,6 +16,9 @@
 - name: Define BASE-only split-tunnel settings
   ansible.builtin.set_fact:
     openvpn_base_settings:
+      vpn.daemon.0.client.network: "{{ openvpn_tunnel_cidr.split('/')[0] }}"
+      vpn.daemon.0.client.netmask_bits: "{{ openvpn_tunnel_cidr.split('/')[1] }}"
+      vpn.server.group_pool.0: "{{ openvpn_group_default_cidr }}"
       vpn.client.routing.reroute_gw: "false"
       vpn.client.routing.reroute_dns: custom
       vpn.server.dhcp_option.dns.0: "{{ internal_dns_server_ip }}"
