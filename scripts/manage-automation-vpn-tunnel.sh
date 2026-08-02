@@ -57,6 +57,14 @@ fi
 cleanup_on_error() {
   local exit_code=$?
   trap - EXIT
+  # close_tunnel 會把 state_directory_real 整個砍掉，openvpn.log 會跟著消失，
+  # 之後完全看不出握手失敗的真正原因（只看得到 workflow 印出的逾時訊息）。
+  # 在砍之前先把它印到 stderr，讓失敗原因留在 CI log 裡。
+  if [[ -f "${state_directory_real}/openvpn.log" ]]; then
+    echo "----- openvpn.log (dumped before cleanup) -----" >&2
+    sudo cat "${state_directory_real}/openvpn.log" >&2 || true
+    echo "----- end openvpn.log -----" >&2
+  fi
   close_tunnel
   exit "${exit_code}"
 }
