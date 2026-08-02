@@ -11,6 +11,7 @@ automation_identity_contract: >-
 openvpn_admin_password: >-
   {{ lookup('ansible.builtin.env', 'OPENVPN_ADMIN_PASSWORD') }}
 openvpn_tunnel_cidr: "{{ platform_config.network.vpn_client_cidr }}"
+openvpn_automation_cidr: "{{ platform_config.network.automation_identity_cidr }}"
 openvpn_server_tunnel_ip: "{{ platform_config.network.internal_dns_ip }}"
 internal_dns_server_ip: "{{ platform_config.network.internal_dns_ip }}"
 upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"

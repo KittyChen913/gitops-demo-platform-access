@@ -40,6 +40,35 @@
     (item.value | string | lower)
   notify: Apply Access Server changes
 
+# ci-automation 用專屬的 group subnet（見 config/shared.json 的
+# network.automation_identity_cidr），跟 dev-ops/prod-ops/platform-ops 等一般
+# VPN User共用的 vpn_client_cidr 動態 pool分開。沒有這個 group subnet，底下的
+# conn_ip 靜態指派不會生效，AS 只會從全域動態 pool 分配位址（見官方文件
+# tutorial--user-and-group-properties-cli.html「Groups need a subnet to work
+# with」）。這個 subnet 只有 3 個自動化身份會用到，host_firewall／
+# vpn_routing 的 MASQUERADE／forward 規則改成只放行這個 CIDR，藉此把三個
+# 自動化身份跟一般人員 VPN User 的存取範圍分開，縮小 5.x
+# 節提到的「整個 tunnel CIDR to any」風險。
+# 注意：172.27.240.0/28 是否跟 Linode VPC／LKE Pod／Service CIDR 等其他網段
+# 衝突，本機無法驗證，需要在實際部署（terraform apply + ansible 實跑）時
+# 確認一次；若衝突，只需要改 config/shared.json 的
+# network.automation_identity_cidr 為其他未使用的 /28（或更大）區段即可。
+- name: Enforce the automation group static IP subnet
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_automation_group }}"
+      - --key
+      - group_subnets.0
+      - --value
+      - "{{ openvpn_automation_cidr }}"
+      - UserPropPut
+  when: >-
+    (automation_group_properties.get('group_subnets.0', '') | string) !=
+    (openvpn_automation_cidr | string)
+  notify: Apply Access Server changes
+
 - name: Read automation identity properties
   ansible.builtin.command:
     argv:
@@ -93,6 +122,31 @@
     (automation_identity_properties[item.0.username]
      .get(item.1.key, '') | string | lower) !=
     (item.1.value | string | lower)
+  no_log: true
+  notify: Apply Access Server changes
+
+# 每個自動化身份指派固定 conn_ip（來自 config/automation-identities.json 的
+# conn_ip 欄位，落在上面設定的 openvpn_automation_cidr 之內）。有了固定 IP，
+# host_firewall／vpn_routing 才能用「這個 /28」而不是整個 openvpn_tunnel_cidr
+# 來限制 forward／MASQUERADE 範圍，避免一般 VPN User 的連線也被納入
+# public egress NAT 的放行範圍。
+- name: Enforce automation identity static IP addresses
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.username }}"
+      - --key
+      - conn_ip
+      - --value
+      - "{{ item.conn_ip }}"
+      - UserPropPut
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: >-
+    (automation_identity_properties[item.username]
+     .get('conn_ip', '') | string) != (item.conn_ip | string)
   no_log: true
   notify: Apply Access Server changes
 

@@ -95,7 +95,7 @@
   notify: Reload UFW
   tags: apply-firewall-rules
 
-- name: Allow VPN clients to forward through the public interface
+- name: Allow only automation identities to forward through the public interface
   ansible.builtin.command:
     argv:
       - ufw
@@ -108,7 +108,7 @@
       - "on"
       - "{{ openvpn_public_interface }}"
       - from
-      - "{{ openvpn_tunnel_cidr }}"
+      - "{{ openvpn_automation_cidr }}"
       - to
       - any
   register: ufw_automation_egress

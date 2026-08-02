@@ -34,7 +34,10 @@
       - automation_verify_properties[openvpn_automation_group].type == 'group'
       - automation_verify_properties[openvpn_automation_group].prop_superuser | string | lower == 'false'
       - automation_verify_properties[openvpn_automation_group].prop_autologin | string | lower == 'false'
-    fail_msg: Automation group contract is not enforced.
+      - (automation_verify_properties[openvpn_automation_group]['group_subnets.0'] | default('')) == openvpn_automation_cidr
+    fail_msg: >-
+      Automation group contract is not enforced, or the dedicated
+      group_subnets.0 static IP subnet is missing/mismatched.
   no_log: true
   tags: verify-automation-identities
 
@@ -46,7 +49,10 @@
       - automation_verify_properties[item.username].conn_group == openvpn_automation_group
       - automation_verify_properties[item.username].prop_superuser | string | lower == 'false'
       - automation_verify_properties[item.username].prop_autologin | string | lower == 'false'
-    fail_msg: Automation identity contract is not enforced.
+      - automation_verify_properties[item.username].conn_ip == item.conn_ip
+    fail_msg: >-
+      Automation identity contract is not enforced, or the static conn_ip
+      assignment is missing/mismatched.
   loop: "{{ openvpn_automation_identities }}"
   loop_control:
     label: "{{ item.username }}"
