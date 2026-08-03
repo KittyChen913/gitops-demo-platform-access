@@ -41,6 +41,56 @@
     fail_msg: IPv4 forwarding is not active.
   tags: verify-vpn-routing
 
+- name: Resolve automation identity routes for forwarding verification
+  ansible.builtin.command:
+    argv:
+      - ip
+      - -j
+      - -4
+      - route
+      - get
+      - "{{ item.conn_ip }}"
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  register: automation_identity_verify_routes
+  changed_when: false
+  tags: verify-vpn-routing
+
+- name: Record automation forwarding verification routes
+  ansible.builtin.set_fact:
+    automation_identity_verify_route_details: >-
+      {{ automation_identity_verify_routes.results |
+         map(attribute='stdout') | map('from_json') | flatten }}
+  tags: verify-vpn-routing
+
+- name: Record automation forwarding verification interfaces
+  ansible.builtin.set_fact:
+    openvpn_automation_verify_interfaces: >-
+      {{ automation_identity_verify_route_details |
+         map(attribute='dev') | unique | list }}
+  tags: verify-vpn-routing
+
+- name: Verify automation egress forwarding rules are active
+  ansible.builtin.command:
+    argv:
+      - iptables
+      - -C
+      - ufw-user-forward
+      - -i
+      - "{{ item }}"
+      - -o
+      - "{{ openvpn_public_interface }}"
+      - -s
+      - "{{ openvpn_automation_cidr }}"
+      - -j
+      - ACCEPT
+  loop: "{{ openvpn_automation_verify_interfaces }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+  tags: verify-vpn-routing
+
 - name: Verify automation egress NAT rule is active
   ansible.builtin.command:
     argv:
