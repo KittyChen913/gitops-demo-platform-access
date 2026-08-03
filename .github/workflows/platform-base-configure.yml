@@ -214,7 +214,7 @@ jobs:
           health-targets: ${{ steps.automation-vpn-test-target.outputs.target }}
 
       - name: "Close automation VPN tunnel [ci-cluster]"
-        if: always()
+        if: ${{ always() && steps.automation-vpn-verify.outputs['state-directory'] != '' }}
         uses: ./.github/actions/close-automation-vpn-tunnel
         with:
           state-directory: ${{ steps.automation-vpn-verify.outputs['state-directory'] }}
