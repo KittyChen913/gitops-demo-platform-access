@@ -34,25 +34,39 @@
       - automation_verify_properties[openvpn_automation_group].type == 'group'
       - automation_verify_properties[openvpn_automation_group].prop_superuser | string | lower == 'false'
       - automation_verify_properties[openvpn_automation_group].prop_autologin | string | lower == 'false'
+      - (automation_verify_properties[openvpn_automation_group]['access_to.0'] | default('')) == ''
+      - (automation_verify_properties[openvpn_automation_group]['access_to.1'] | default('')) == ''
       - (automation_verify_properties[openvpn_automation_group]['group_subnets.0'] | default('')) == openvpn_automation_cidr
     fail_msg: >-
-      Automation group contract is not enforced, or the dedicated
-      group_subnets.0 static IP subnet is missing/mismatched.
+      Automation group contract is not enforced, broad public egress access
+      is present, or the dedicated group_subnets.0 static IP subnet is
+      missing/mismatched.
   no_log: true
   tags: verify-automation-identities
 
 - name: Verify automation identity boundaries
   ansible.builtin.assert:
     that:
-      - automation_verify_properties[item.username].type == 'user_connect'
+      - >-
+        automation_verify_properties[item.username].type ==
+        (item.public_egress | ternary('user_compile', 'user_connect'))
       - automation_verify_properties[item.username].user_auth_type == 'local'
       - automation_verify_properties[item.username].conn_group == openvpn_automation_group
       - automation_verify_properties[item.username].prop_superuser | string | lower == 'false'
       - automation_verify_properties[item.username].prop_autologin | string | lower == 'false'
       - automation_verify_properties[item.username].conn_ip == item.conn_ip
+      - >-
+        (automation_verify_properties[item.username]['access_to.0'] |
+         default('')) ==
+        (item.public_egress | ternary('+NAT:0.0.0.0/1', ''))
+      - >-
+        (automation_verify_properties[item.username]['access_to.1'] |
+         default('')) ==
+        (item.public_egress | ternary('+NAT:128.0.0.0/1', ''))
     fail_msg: >-
-      Automation identity contract is not enforced, or the static conn_ip
-      assignment is missing/mismatched.
+      Automation identity contract is not enforced, the static conn_ip
+      assignment is missing/mismatched, or public egress access violates the
+      per-identity boundary.
   loop: "{{ openvpn_automation_identities }}"
   loop_control:
     label: "{{ item.username }}"

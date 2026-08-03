@@ -88,7 +88,7 @@ check "credential_bootstrap_contract" {
     condition = (
       local.material_version == 1 &&
       local.automation_password_version == 1 &&
-      local.automation_identity_contract.schema_version == 1 &&
+      local.automation_identity_contract.schema_version == 2 &&
       local.automation_identity_contract.group == "ci-automation" &&
       length(local.automation_identities) == 3 &&
       alltrue([
@@ -97,6 +97,7 @@ check "credential_bootstrap_contract" {
         startswith(identity.password_ssm_path, "/gitops/platform-access/automation/${username}/") &&
         endswith(identity.profile_ssm_path, "/PROFILE") &&
         endswith(identity.password_ssm_path, "/PASSWORD") &&
+        identity.public_egress == contains(["ci-cluster", "ci-infra"], username) &&
         local.automation_identity_ip_numbers[username] > local.automation_identity_cidr_range.first + 1 &&
         local.automation_identity_ip_numbers[username] < local.automation_identity_cidr_range.last - 1
       ]) &&

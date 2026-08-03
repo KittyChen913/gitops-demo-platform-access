@@ -40,6 +40,23 @@
     (item.value | string | lower)
   notify: Apply Access Server changes
 
+# Public egress 必須由 identity contract 個別授權；不可在 ci-automation group
+# 放寬，否則只需存取 Server 本機 TCP/943 的身份也會取得 Internet access。
+- name: Remove broad public egress access from the automation group
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ openvpn_automation_group }}"
+      - --key
+      - "{{ item }}"
+      - UserPropDel
+  loop:
+    - access_to.1
+    - access_to.0
+  when: automation_group_properties.get(item, '') | length > 0
+  notify: Apply Access Server changes
+
 # ci-automation 使用 config/shared.json 中獨立的 static group subnet；BASE
 # Terraform contract 會先確認它不與一般 client dynamic pool 或 group default
 # pool 重疊。固定 conn_ip 讓 host firewall 與 VPN egress NAT 只放行自動化身份，
@@ -102,7 +119,6 @@
   loop: >-
     {{ openvpn_automation_identities |
        product([
-         {'key': 'type', 'value': 'user_connect'},
          {'key': 'user_auth_type', 'value': 'local'},
          {'key': 'conn_group', 'value': openvpn_automation_group},
          {'key': 'prop_superuser', 'value': 'false'},
@@ -114,6 +130,75 @@
     (automation_identity_properties[item.0.username]
      .get(item.1.key, '') | string | lower) !=
     (item.1.value | string | lower)
+  no_log: true
+  notify: Apply Access Server changes
+
+- name: Enforce automation identity network profile types
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.username }}"
+      - --key
+      - type
+      - --value
+      - "{{ item.public_egress | ternary('user_compile', 'user_connect') }}"
+      - UserPropPut
+  loop: "{{ openvpn_automation_identities }}"
+  loop_control:
+    label: "{{ item.username }}"
+  when: >-
+    (automation_identity_properties[item.username].get('type', '') | string) !=
+    (item.public_egress | ternary('user_compile', 'user_connect'))
+  no_log: true
+  notify: Apply Access Server changes
+
+- name: Enforce public egress access for authorized automation identities
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.0.username }}"
+      - --key
+      - "{{ item.1.key }}"
+      - --value
+      - "{{ item.1.value }}"
+      - UserPropPut
+  loop: >-
+    {{ openvpn_automation_identities |
+       product([
+         {'key': 'access_to.0', 'value': '+NAT:0.0.0.0/1'},
+         {'key': 'access_to.1', 'value': '+NAT:128.0.0.0/1'}
+       ]) | list }}
+  loop_control:
+    label: "{{ item.0.username }}:{{ item.1.key }}"
+  when:
+    - item.0.public_egress | bool
+    - >-
+      (automation_identity_properties[item.0.username]
+       .get(item.1.key, '') | string) != (item.1.value | string)
+  no_log: true
+  notify: Apply Access Server changes
+
+- name: Remove public egress access from local-only automation identities
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.0.username }}"
+      - --key
+      - "{{ item.1 }}"
+      - UserPropDel
+  loop: >-
+    {{ openvpn_automation_identities |
+       product(['access_to.1', 'access_to.0']) | list }}
+  loop_control:
+    label: "{{ item.0.username }}:{{ item.1 }}"
+  when:
+    - not (item.0.public_egress | bool)
+    - >-
+      automation_identity_properties[item.0.username]
+      .get(item.1, '') | length > 0
   no_log: true
   notify: Apply Access Server changes
 

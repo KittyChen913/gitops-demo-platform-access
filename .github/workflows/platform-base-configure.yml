@@ -184,8 +184,8 @@ jobs:
               --tags verify-automation-identities
 
       # verify-automation-identities 只查 sacli 屬性值，沒真的開過 tunnel。
-      # 這裡挑 ci-cluster 代表三個身份跑一次端對端驗證；目標用
-      # internal_dns_ip:admin_port，只驗證 tunnel 本身，不代表下游可達性。
+      # 這裡挑 ci-cluster 代表三個身份連到既有 upstream DNS 的 TCP/53，
+      # 同時驗證 Access Server ACL、host forwarding 與 public egress NAT。
       - name: "Resolve automation VPN test target"
         id: automation-vpn-test-target
         run: |
@@ -193,13 +193,13 @@ jobs:
           config="${GITHUB_WORKSPACE}/config/shared.json"
           contract="${GITHUB_WORKSPACE}/config/automation-identities.json"
           test_identity="ci-cluster"
-          dns_target="$(jq -r '.network.internal_dns_ip' "${config}"):$(jq -r '.linode.admin_port' "${config}")"
+          egress_target="$(jq -er '.network.upstream_dns_servers[0] | select(type == "string" and length > 0)' "${config}"):53"
           {
             echo "identity=${test_identity}"
             echo "profile_parameter=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .profile_ssm_path' "${contract}")"
             echo "password_parameter=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .password_ssm_path' "${contract}")"
             echo "expected_tunnel_ip=$(jq -r --arg u "${test_identity}" '.identities[] | select(.username == $u) | .conn_ip' "${contract}")"
-            echo "target=${dns_target}"
+            echo "target=${egress_target}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: "Open automation VPN tunnel [ci-cluster]"

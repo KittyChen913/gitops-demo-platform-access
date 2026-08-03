@@ -14,12 +14,22 @@
     - name: Validate automation identity password hand-off
       ansible.builtin.assert:
         that:
-          - automation_identity_contract.schema_version == 1
+          - automation_identity_contract.schema_version == 2
           - openvpn_automation_group == 'ci-automation'
           - openvpn_automation_identities | length == 3
           - lookup('ansible.builtin.env', 'AUTOMATION_IDENTITY_PASSWORD_DIRECTORY') | length > 0
         fail_msg: Automation identity contract or password hand-off is invalid.
       no_log: true
+      tags: always
+
+    - name: Validate automation identity egress boundaries
+      ansible.builtin.assert:
+        that:
+          - item.public_egress is boolean
+        fail_msg: Automation identity public_egress must be a boolean.
+      loop: "{{ openvpn_automation_identities }}"
+      loop_control:
+        label: "{{ item.username }}"
       tags: always
 
     - name: Initialize automation identity password map
