@@ -100,55 +100,15 @@
   notify: Reload UFW
   tags: apply-firewall-rules
 
-- name: Resolve automation identity routes
-  ansible.builtin.command:
-    argv:
-      - ip
-      - -j
-      - -4
-      - route
-      - get
-      - "{{ item.conn_ip }}"
-  loop: "{{ openvpn_automation_identities }}"
-  loop_control:
-    label: "{{ item.username }}"
-  register: automation_identity_routes
-  changed_when: false
-  tags: apply-firewall-rules
-
-- name: Record automation identity route details
-  ansible.builtin.set_fact:
-    automation_identity_route_details: >-
-      {{ automation_identity_routes.results |
-         map(attribute='stdout') | map('from_json') | flatten }}
-  tags: apply-firewall-rules
-
-- name: Record automation tunnel interfaces
-  ansible.builtin.set_fact:
-    openvpn_automation_tunnel_interfaces: >-
-      {{ automation_identity_route_details |
-         map(attribute='dev') | unique | list }}
-  tags: apply-firewall-rules
-
-- name: Refuse automation routes outside Access Server tunnel interfaces
-  ansible.builtin.assert:
-    that:
-      - openvpn_automation_tunnel_interfaces | length > 0
-      - openvpn_public_interface not in openvpn_automation_tunnel_interfaces
-      - "'lo' not in openvpn_automation_tunnel_interfaces"
-    fail_msg: >-
-      Automation identity routes do not use an Access Server tunnel interface.
-  tags: apply-firewall-rules
-
+# automation static pool 的 client route 只在 identity 連線後才會指向 Access
+# Server tunnel interface；BASE 套用期間無法從未連線的 conn_ip 推導入口。
+# 因此以 automation 專屬 source CIDR 與 public output interface 同時限縮。
 - name: Allow only automation identities to forward through the public interface
   ansible.builtin.command:
     argv:
       - ufw
       - route
       - allow
-      - in
-      - "on"
-      - "{{ item }}"
       - out
       - "on"
       - "{{ openvpn_public_interface }}"
@@ -156,9 +116,6 @@
       - "{{ openvpn_automation_cidr }}"
       - to
       - any
-  loop: "{{ openvpn_automation_tunnel_interfaces }}"
-  loop_control:
-    label: "{{ item }}"
   register: ufw_automation_egress
   changed_when: "'Skipping adding existing rule' not in ufw_automation_egress.stdout"
   notify: Reload UFW
