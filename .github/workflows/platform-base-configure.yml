@@ -76,14 +76,6 @@ jobs:
           aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
           fetch-automation-passwords: "true"
 
-      - name: "Configure IPv4 forwarding"
-        env:
-          INVENTORY: ${{ steps.open.outputs.inventory-path }}
-        run: |
-          set -euo pipefail
-          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-vpn-routing.yml
-
       - name: "Install dnsmasq package"
         env:
           INVENTORY: ${{ steps.open.outputs.inventory-path }}
@@ -140,6 +132,22 @@ jobs:
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-host-firewall.yml --tags apply-firewall-rules
+
+      - name: "Configure IPv4 forwarding and automation egress NAT"
+        env:
+          INVENTORY: ${{ steps.open.outputs.inventory-path }}
+        run: |
+          set -euo pipefail
+          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/configure-vpn-routing.yml
+
+      - name: "Verify VPN routing"
+        env:
+          INVENTORY: ${{ steps.open.outputs.inventory-path }}
+        run: |
+          set -euo pipefail
+          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml --tags verify-vpn-routing
 
       - name: "Verify OpenVPN service"
         env:

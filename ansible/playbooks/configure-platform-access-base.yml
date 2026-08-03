@@ -14,10 +14,11 @@
       tags: always
 
   roles:
-    - vpn_routing
     - dnsmasq
     - openvpn_access_server
     - host_firewall
+    # Access Server 與 UFW 都可能重建 netfilter rules；NAT 必須最後套用。
+    - vpn_routing
 
   post_tasks:
     - ansible.builtin.meta: flush_handlers

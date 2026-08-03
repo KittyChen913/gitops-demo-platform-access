@@ -26,3 +26,34 @@
         regex('(?m)(0\\.0\\.0\\.0|\\[::\\]|\\*):53\\b')
     fail_msg: DNS is listening on a public or wildcard address.
   tags: verify-dns-exposure
+
+- name: Read IPv4 forwarding state
+  ansible.builtin.command:
+    argv: [sysctl, -n, net.ipv4.ip_forward]
+  register: ipv4_forwarding_state
+  changed_when: false
+  tags: verify-vpn-routing
+
+- name: Verify IPv4 forwarding is active
+  ansible.builtin.assert:
+    that:
+      - ipv4_forwarding_state.stdout | trim == '1'
+    fail_msg: IPv4 forwarding is not active.
+  tags: verify-vpn-routing
+
+- name: Verify automation egress NAT rule is active
+  ansible.builtin.command:
+    argv:
+      - iptables
+      - -t
+      - nat
+      - -C
+      - POSTROUTING
+      - -s
+      - "{{ openvpn_automation_cidr }}"
+      - -o
+      - "{{ openvpn_public_interface }}"
+      - -j
+      - MASQUERADE
+  changed_when: false
+  tags: verify-vpn-routing

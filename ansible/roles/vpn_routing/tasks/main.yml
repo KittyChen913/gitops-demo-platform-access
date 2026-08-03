@@ -1,4 +1,7 @@
 ---
+- name: Apply pending network and firewall handlers before NAT
+  ansible.builtin.meta: flush_handlers
+
 - name: Enable IPv4 forwarding idempotently
   ansible.builtin.template:
     src: 99-openvpn-forwarding.conf.j2
@@ -16,11 +19,10 @@
     group: root
     mode: "0644"
   register: automation_egress_service
-  notify: Restart automation egress NAT
 
-- name: Enable automation egress NAT
+- name: Reconcile automation egress NAT
   ansible.builtin.systemd_service:
     name: openvpn-automation-egress.service
     enabled: true
-    state: started
+    state: restarted
     daemon_reload: "{{ automation_egress_service.changed }}"
