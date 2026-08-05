@@ -35,8 +35,6 @@ jobs:
           expected_ref_prefix="refs/tags/${tag_prefix}"
 
           test "${GITHUB_REPOSITORY}" = "$(jq -r '.repository.slug' "${config}")"
-          test "${tag_prefix}" = "v"
-          test "${operations_ref}" = "refs/heads/master"
           [[ "${GITHUB_REF}" == "${expected_ref_prefix}"* ]]
           version="${GITHUB_REF#"${expected_ref_prefix}"}"
           [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]

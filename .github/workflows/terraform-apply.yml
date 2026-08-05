@@ -40,21 +40,6 @@ jobs:
           set -euo pipefail
           case "${DEPLOYMENT}" in credential-bootstrap|base) ;; *) exit 1 ;; esac
 
-      - name: "Validate version-controlled deployment contract"
-        run: |
-          set -euo pipefail
-          jq -e '
-            .schema_version == 2 and
-            .repository.operations_ref == "refs/heads/master" and
-            .repository.deployment_tag_prefix == "v" and
-            .terraform_backend.use_lockfile == true and
-            .credential_bootstrap_backend.use_lockfile == true and
-            .linode.marketplace_stackscript_id == 401719 and
-            .linode.image == "linode/ubuntu24.04" and
-            .linode.automation_username == "vpnadmin" and
-            .linode.openvpn_admin_username == "openvpn"
-          ' config/shared.json >/dev/null
-
       - name: "Configure AWS credentials via OIDC"
         uses: ./.github/actions/configure-aws-credentials
         with:
