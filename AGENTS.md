@@ -18,6 +18,14 @@
 - Credential、Secret、Terraform state、plan JSON 與 private key 不得輸出到 log、summary 或 artifact。
 - Runtime 操作必須維持 runner `/32`、strict host-key pin、baseline cleanup 與 fail-closed 行為。
 
+## 安全與破壞性操作
+
+- 不要主動執行 `terraform apply`，或手動觸發 `platform-base-configure.yml`、`terraform-deploy.yml`、`terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
+- destroy 只能由 `terraform-destroy.yml` 手動觸發，需輸入 `DESTROY-SHARED-ALL` 確認字串；apply 順序固定先 `base`（確認 state 清空後）再 `credential-bootstrap`，不要繞過此順序或改用 `-auto-approve`。
+- 不要讀取、印出或提交 secret；若需確認 secret 是否存在，只回報存在與否。
+- 不要修改 Terraform state、遠端 S3 state 或 GitHub Environment protection 設定，除非使用者明確要求。
+- 不要回復使用者既有未提交變更；工作區已有變更時，先理解並在其上工作。
+
 ## 註解與顯示文字規範
 
 - 人工維護的 Terraform、GitHub Actions、Ansible、設定檔與 Shell 註解必須使用繁體中文。
