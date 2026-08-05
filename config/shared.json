@@ -17,7 +17,8 @@
       "openvpn_ssh_host_key": "/gitops/platform-access/openvpn/ansible/OPENVPN_SSH_HOST_KEY",
       "vpn_public_egress_ip": "/gitops/platform-access/network/VPN_PUBLIC_EGRESS_IP",
       "vpn_client_cidr": "/gitops/platform-access/network/VPN_CLIENT_CIDR",
-      "internal_dns_ip": "/gitops/platform-access/network/INTERNAL_DNS_IP"
+      "internal_dns_ip": "/gitops/platform-access/network/INTERNAL_DNS_IP",
+      "internal_domain": "/gitops/platform-access/network/INTERNAL_DOMAIN"
     }
   },
   "linode": {
@@ -36,6 +37,7 @@
     "vpn_client_cidr": "172.27.224.0/20",
     "vpn_group_default_cidr": "172.27.240.0/20",
     "internal_dns_ip": "172.27.224.1",
+    "internal_domain": "kittyops.net",
     "automation_identity_cidr": "172.28.0.0/24",
     "upstream_dns_servers": ["1.1.1.1", "1.0.0.1"]
   },

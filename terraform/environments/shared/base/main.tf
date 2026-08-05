@@ -85,3 +85,13 @@ resource "aws_ssm_parameter" "internal_dns_ip" {
   type  = "String"
   value = local.deployment_config.network.internal_dns_ip
 }
+
+resource "aws_ssm_parameter" "internal_domain" {
+  name  = local.deployment_config.aws.ssm_parameter_paths.internal_domain
+  type  = "String"
+  value = local.deployment_config.network.internal_domain
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
