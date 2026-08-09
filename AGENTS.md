@@ -7,14 +7,18 @@
 - 本 Repository 擁有 Shared OpenVPN BASE、Reserved IPv4、VPN Server Firewall、Internal DNS、routing/NAT、一般 User groups、credential bootstrap、CI 自動化 VPN 身份與 network SSM outputs。
 - 不管理 LKE、Worker Firewall、ArgoCD、application manifests 或一般 VPN User lifecycle。
 - CI 自動化 VPN 身份綁定 consuming Repository，屬 credential bootstrap 的延伸；一般員工 User 的 onboard／offboard 與 email token lifecycle 仍由 `gitops-demo-user-provisioning` 管理。
-- 目前不實作 Dev／Prod endpoint SYNC；沒有 runtime evidence 的功能不得預先加入。
+- Dev／Prod endpoint SYNC 由本 Repository 擁有：消費 `gitops-demo-infra` 發布的 `/gitops/<environment>/platform/argocd/{ENDPOINT_IP,ENDPOINT_HOSTNAME}`，建立 internal DNS host record、人員 group 的 endpoint access rule 與對應的 UFW forward 規則。人員 group 的 route／NAT／DNS 屬本 Repository，帳號與 group 指派仍屬 `gitops-demo-user-provisioning`。
+- SYNC 必須獨立觸發（`platform-sync-configure.yml`），不得掛進 BASE apply 流程：endpoint parameters 要到 `gitops-demo-infra` 的 private-network root apply 之後才存在。
+- SYNC 的 runtime evidence boundary：程式碼可先完成，但在對應環境的 endpoint 實際存在前不得套用；`config/environments/<environment>.json` 之外不得出現 endpoint 的實際值。
+- 對人員 group default pool 的 SYNC traffic，Access Server 原生 NAT（`vpn.server.routing.private_access=nat`）是唯一的 SNAT owner。Automation static pool 仍由既有 `openvpn-automation-egress.service` 管理；SYNC 不得新增第二條人員流量 MASQUERADE 或 SNAT chain。
 
 ## 實作規則
 
 - 自動化腳本只使用 Shell，不得新增 Python 腳本或 Python invocation。
 - 優先沿用現有 Shell 與 workflow `run` block；不得建立不必要的 helper、adapter、framework 或跨 Repo library。
 - 不維護 Unit Test、mock、fixture、fake adapter 或 test-only helper。
-- `config/shared.json` 是 Shared BASE 的 canonical configuration。
+- `config/shared.json` 是 Shared BASE 的 canonical configuration；`config/environments/<environment>.json` 只保存對應環境 SYNC 的授權 group，不得複製可由 environment 與 Shared config 推導的 SSM path、hostname、port、protocol 或 index。
+- Dev 與 Prod 的 SYNC contract 不得交叉：`access_to` 索引由 environment 唯一推導，未授權的 group 必須驗證所有 `access_to.*` 都沒有該 endpoint 規則。
 - Credential、Secret、Terraform state、plan JSON 與 private key 不得輸出到 log、summary 或 artifact。
 - Runtime 操作必須維持 runner `/32`、strict host-key pin、baseline cleanup 與 fail-closed 行為。
 

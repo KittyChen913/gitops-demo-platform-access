@@ -1,0 +1,161 @@
+---
+- name: Read Access Server configuration
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, ConfigQuery]
+  register: sync_config_query
+  changed_when: false
+  no_log: true
+
+# BASE 已把 vpn.server.routing.private_access 設為 nat，Access Server 原生 NAT
+# 因此是人員群組流量唯一的 SNAT owner。SYNC 只驗證這個值，不建立第二條 MASQUERADE
+# chain：兩個 SNAT owner 會讓封包來源難以推論，套用順序也會互相干擾。
+- name: Verify Access Server native NAT is the only SNAT owner
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_config_query.stdout | from_json).get(
+        'vpn.server.routing.private_access', '') == 'nat'
+    fail_msg: >-
+      Access Server native NAT is not enabled; apply BASE before running SYNC.
+
+- name: Read access group properties
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ item }}"
+      - UserPropGet
+  loop: "{{ openvpn_access_groups }}"
+  register: sync_group_queries
+  changed_when: false
+  no_log: true
+
+- name: Build access group property map
+  ansible.builtin.set_fact:
+    sync_group_properties: >-
+      {{ sync_group_properties | default({}) |
+         combine({item.item: ((item.stdout | from_json).get(item.item, {}))}) }}
+  loop: "{{ sync_group_queries.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Refuse missing or non-group Access Server identities
+  ansible.builtin.assert:
+    that:
+      - sync_group_properties[item].get('type', '') == 'group'
+      - >-
+        sync_group_properties[item].get('group_declare', 'false') |
+        string | lower == 'true'
+    fail_msg: An approved BASE group is missing or is not declared as a group.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+
+# 本 Repository 擁有三個人員 group 的 network policy，因此只接受兩個已保留的
+# access_to index，並拒絕 automation 使用的廣域 `/1` 規則。未知 index 不自動
+# 刪除，直接 fail closed，避免把人工或其他 owner 的設定靜默覆蓋。
+- name: Refuse unexpected or broad human group access rules
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='key') | list
+         | difference(['access_to.0', 'access_to.1'])) | length == 0
+      - >-
+        (sync_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='value') | list
+         | intersect(['+NAT:0.0.0.0/1', '+NAT:128.0.0.0/1'])) | length == 0
+    fail_msg: A human group holds an unexpected or broad access rule.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Refuse access in an environment where the group is unauthorized
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item not in sync_other_authorized_groups and
+         (sync_group_properties[item][sync_other_access_to_key] | default('')) == '')
+        or
+        (item in sync_other_authorized_groups and
+         ((sync_group_properties[item][sync_other_access_to_key] | default('')) == '' or
+          ((sync_group_properties[item][sync_other_access_to_key] |
+            default('')) is match('^\+NAT:([0-9]{1,3}\.){3}[0-9]{1,3}:tcp/443$'))))
+      - >-
+        sync_access_to_value not in
+        (sync_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | rejectattr('key', 'equalto', sync_access_to_key)
+         | map(attribute='value') | list)
+    fail_msg: A group holds endpoint access outside its authorization contract.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+
+# Endpoint rebuild 只可覆寫本 environment 上一次成功完成 transition 的值。
+# 不再接受任意「長得像 NAT/443」的規則，避免 Dev/Prod index collision 被誤判安全。
+- name: Refuse to overwrite an unrelated access rule
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_group_properties[item][sync_access_to_key] | default('')) in
+        ['', sync_access_to_value, sync_previous_access_to_value]
+    fail_msg: >-
+      The reserved access_to index already holds an unrelated rule.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+
+# 只授權單一 host 的 TCP/443，不使用 0.0.0.0/1 這類全網段寫法：人員需要的是
+# 一扇門，不是一條通道。automation identity 取得全網段是既有的已知妥協，
+# 不應複製到人員 group 上。
+- name: Authorize approved groups for the ArgoCD endpoint
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - "{{ sync_access_to_key }}"
+      - --value
+      - "{{ sync_access_to_value }}"
+      - UserPropPut
+  loop: "{{ sync_authorized_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  when: >-
+    (sync_group_properties[item][sync_access_to_key] | default('')) !=
+    sync_access_to_value
+  notify: Apply Access Server changes
+
+# 未授權的 group 必須確實沒有本環境的規則，避免 Dev 與 Prod 交叉授權。
+- name: Remove endpoint authorization from groups outside this environment
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item }}"
+      - --key
+      - "{{ sync_access_to_key }}"
+      - UserPropDel
+  loop: "{{ sync_unauthorized_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  when: >-
+    (sync_group_properties[item][sync_access_to_key] | default('')) | length > 0
+  notify: Apply Access Server changes
+
+# 若前一次在 UserPropPut 後、sacli start 前失敗，property 已可能等於 desired
+# value，單靠 when 不會再次通知 handler。Transition state 直到 finalize 成功
+# 才前進，因此 endpoint 改變期間固定要求重新套用一次，讓 retry 能自行修復。
+- name: Reapply Access Server changes during an unfinished endpoint transition
+  ansible.builtin.debug:
+    msg: Reapplying Access Server changes for the endpoint transition.
+  changed_when: sync_previous_endpoint_ip != sync_endpoint_ip
+  notify: Apply Access Server changes
+
+- name: Apply Access Server changes before verification
+  ansible.builtin.meta: flush_handlers

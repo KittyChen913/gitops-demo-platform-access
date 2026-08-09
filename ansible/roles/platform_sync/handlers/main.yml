@@ -1,0 +1,21 @@
+---
+- name: Validate dnsmasq configuration
+  ansible.builtin.command:
+    argv: [dnsmasq, --test]
+  changed_when: false
+
+- name: Restart dnsmasq
+  ansible.builtin.systemd_service:
+    name: dnsmasq
+    state: restarted
+
+- name: Reload UFW
+  ansible.builtin.command:
+    argv: [ufw, reload]
+  changed_when: true
+
+- name: Apply Access Server changes
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, start]
+  changed_when: true
+  no_log: true

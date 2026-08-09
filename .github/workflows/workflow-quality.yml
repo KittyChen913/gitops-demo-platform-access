@@ -96,4 +96,10 @@ jobs:
           ansible/playbooks/configure-platform-access-base.yml
           && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
           --syntax-check -i localhost,
-          ansible/playbooks/configure-automation-identities.yml"
+          ansible/playbooks/configure-automation-identities.yml
+          && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
+          --syntax-check -i localhost, -e sync_environment=dev
+          ansible/playbooks/configure-platform-access-sync.yml
+          && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
+          --syntax-check -i localhost, -e sync_environment=dev
+          ansible/playbooks/verify-platform-access-sync.yml"

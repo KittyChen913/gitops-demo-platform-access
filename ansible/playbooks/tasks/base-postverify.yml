@@ -5,6 +5,23 @@
   changed_when: false
   tags: verify-openvpn
 
+- name: Read BASE Access Server configuration for verification
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, ConfigQuery]
+  register: base_verify_config_query
+  changed_when: false
+  no_log: true
+  tags: verify-openvpn
+
+- name: Verify the BASE split-DNS domain is active
+  ansible.builtin.assert:
+    that:
+      - >-
+        (base_verify_config_query.stdout | from_json).get(
+        'vpn.server.dhcp_option.domain', '') == internal_domain
+    fail_msg: The BASE split-DNS domain is not active.
+  tags: verify-openvpn
+
 - name: Verify dnsmasq configuration
   ansible.builtin.command:
     argv: [dnsmasq, --test]

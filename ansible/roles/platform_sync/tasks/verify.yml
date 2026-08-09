@@ -1,0 +1,169 @@
+---
+# 套用後重新查詢實際值再比對。OpenVPN Access Server 的 per-group access rule
+# 行為在本部署尚未經 runtime 驗證，因此不信任「指令執行成功」本身，一律以
+# 回讀結果為準；不符即失敗，不做猜測或重試。
+- name: Read Access Server configuration for verification
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, ConfigQuery]
+  register: sync_verify_config
+  changed_when: false
+  no_log: true
+  tags: verify-sync
+
+- name: Verify Access Server native NAT remains the only SNAT owner
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_verify_config.stdout | from_json).get(
+        'vpn.server.routing.private_access', '') == 'nat'
+    fail_msg: Access Server native NAT is not enabled.
+  tags: verify-sync
+
+- name: Read access group properties for verification
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --pfilt
+      - "{{ item }}"
+      - UserPropGet
+  loop: "{{ openvpn_access_groups }}"
+  register: sync_verify_queries
+  changed_when: false
+  no_log: true
+  tags: verify-sync
+
+- name: Build access group verification map
+  ansible.builtin.set_fact:
+    sync_verify_properties: >-
+      {{ sync_verify_properties | default({}) |
+         combine({item.item: ((item.stdout | from_json).get(item.item, {}))}) }}
+  loop: "{{ sync_verify_queries.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+  tags: verify-sync
+
+- name: Verify the human group access rule structure
+  ansible.builtin.assert:
+    that:
+      - sync_verify_properties[item].get('type', '') == 'group'
+      - >-
+        sync_verify_properties[item].get('group_declare', 'false') |
+        string | lower == 'true'
+      - >-
+        (sync_verify_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='key') | list
+         | difference(['access_to.0', 'access_to.1'])) | length == 0
+      - >-
+        (sync_verify_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='value') | list
+         | intersect(['+NAT:0.0.0.0/1', '+NAT:128.0.0.0/1'])) | length == 0
+      - >-
+        (item in sync_other_authorized_groups) or
+        (sync_verify_properties[item][sync_other_access_to_key] | default('')) == ''
+    fail_msg: A human group violates the access rule structure.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: verify-sync
+
+- name: Verify authorized groups hold exactly the endpoint rule
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_verify_properties[item][sync_access_to_key] | default('')) ==
+        sync_access_to_value
+      - >-
+        sync_access_to_value not in
+        (sync_verify_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | rejectattr('key', 'equalto', sync_access_to_key)
+         | map(attribute='value') | list)
+    fail_msg: >-
+      An authorized group is missing the ArgoCD endpoint access rule.
+  loop: "{{ sync_authorized_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: verify-sync
+
+- name: Verify groups outside this environment hold no endpoint rule
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_verify_properties[item][sync_access_to_key] | default('')) == ''
+      - >-
+        sync_access_to_value not in
+        (sync_verify_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='value') | list)
+    fail_msg: >-
+      A group outside this environment still holds an endpoint access rule.
+  loop: "{{ sync_unauthorized_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: verify-sync
+
+# 直接問 tunnel resolver，確認 record 真的被 dnsmasq 載入，而不只是檔案存在。
+- name: Resolve the endpoint hostname through the tunnel resolver
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "@{{ internal_dns_server_ip }}"
+      - "{{ sync_endpoint_hostname }}"
+      - A
+  register: sync_dns_answer
+  changed_when: false
+  tags: verify-sync
+
+- name: Verify the endpoint host record resolves to the published address
+  ansible.builtin.assert:
+    that:
+      - sync_dns_answer.stdout | trim == sync_endpoint_ip
+    fail_msg: >-
+      The internal resolver does not return the published endpoint address.
+  tags: verify-sync
+
+# 比照 base-postverify 的作法，直接確認規則存在於 ufw-user-forward chain，
+# 而不是解析 ufw status 的輸出格式。
+#
+# 這裡用 -S 列出規則再比對，不用 iptables -C：帶 --dport 的規則實際會被
+# 展開成含 "-m tcp" 的形式，-C 對參數順序與 module 展開較敏感，容易在規則
+# 確實存在時誤報不存在。
+- name: Read the forward chain rules
+  ansible.builtin.command:
+    argv: [iptables, -S, ufw-user-forward]
+  register: sync_forward_rules
+  changed_when: false
+  tags: verify-sync
+
+- name: Verify the endpoint forward rule is active
+  ansible.builtin.assert:
+    that:
+      - >-
+        sync_forward_rules.stdout_lines
+        | select('search', '(^| )-s ' ~ (sync_client_cidr | regex_escape) ~ '($| )')
+        | select('search', '(^| )-d ' ~ (sync_endpoint_cidr | regex_escape) ~ '($| )')
+        | select('search', '(^| )-o ' ~ (openvpn_public_interface | regex_escape) ~ '($| )')
+        | select('search', '(^| )-p ' ~ (sync_endpoint_protocol | regex_escape) ~ '($| )')
+        | select('search', '(^| )--dport ' ~ sync_endpoint_port ~ '($| )')
+        | select('search', '(^| )-j ACCEPT($| )')
+        | list | length == 1
+    fail_msg: >-
+      The endpoint forward rule is missing from the ufw-user-forward chain.
+  tags: verify-sync
+
+- name: Verify no broad human group forward rule is active
+  ansible.builtin.assert:
+    that:
+      - >-
+        sync_forward_rules.stdout_lines
+        | select('search', '(^| )-s ' ~ (sync_client_cidr | regex_escape) ~ '($| )')
+        | select('search', '(^| )-o ' ~ (openvpn_public_interface | regex_escape) ~ '($| )')
+        | reject('search', '(^| )-d ([0-9]{1,3}\.){3}[0-9]{1,3}/32($| )')
+        | select('search', '(^| )-j ACCEPT($| )')
+        | list | length == 0
+    fail_msg: A broad human group forward rule is active.
+  tags: verify-sync

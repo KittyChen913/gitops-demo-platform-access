@@ -1,0 +1,73 @@
+---
+# 只有新 DNS、Access Server property 與 active UFW rule 全部通過 verify 後，
+# 才移除舊規則並前進 transition state。若本檔中途失敗，下次 SYNC 仍以舊 IP
+# 重試 cleanup，不會像使用 DNS 檔作狀態時永久失去清理來源。
+- name: Remove the forward rule for a superseded endpoint address
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - --force
+      - route
+      - delete
+      - allow
+      - out
+      - "on"
+      - "{{ openvpn_public_interface }}"
+      - from
+      - "{{ sync_client_cidr }}"
+      - to
+      - "{{ sync_previous_endpoint_ip }}"
+      - port
+      - "{{ sync_endpoint_port }}"
+      - proto
+      - "{{ sync_endpoint_protocol }}"
+  register: sync_ufw_stale_delete
+  changed_when: >-
+    sync_ufw_stale_delete.rc == 0 and
+    'Could not delete non-existent rule' not in
+    (sync_ufw_stale_delete.stdout ~ sync_ufw_stale_delete.stderr)
+  failed_when: >-
+    sync_ufw_stale_delete.rc != 0 and
+    'Could not delete non-existent rule' not in
+    (sync_ufw_stale_delete.stdout ~ sync_ufw_stale_delete.stderr)
+  when:
+    - sync_previous_endpoint_ip | length > 0
+    - sync_previous_endpoint_ip != sync_endpoint_ip
+  notify: Reload UFW
+
+- name: Apply stale firewall cleanup
+  ansible.builtin.meta: flush_handlers
+
+- name: Read forward rules after stale cleanup
+  ansible.builtin.command:
+    argv: [iptables, -S, ufw-user-forward]
+  register: sync_final_forward_rules
+  changed_when: false
+  when:
+    - sync_previous_endpoint_ip | length > 0
+    - sync_previous_endpoint_ip != sync_endpoint_ip
+
+- name: Verify the superseded endpoint rule is absent
+  ansible.builtin.assert:
+    that:
+      - >-
+        sync_final_forward_rules.stdout_lines
+        | select('search', '(^| )-s ' ~ (sync_client_cidr | regex_escape) ~ '($| )')
+        | select('search', '(^| )-d ' ~ ((sync_previous_endpoint_ip ~ '/32') | regex_escape) ~ '($| )')
+        | select('search', '(^| )-o ' ~ (openvpn_public_interface | regex_escape) ~ '($| )')
+        | select('search', '(^| )-p ' ~ (sync_endpoint_protocol | regex_escape) ~ '($| )')
+        | select('search', '(^| )--dport ' ~ sync_endpoint_port ~ '($| )')
+        | select('search', '(^| )-j ACCEPT($| )')
+        | list | length == 0
+    fail_msg: The superseded endpoint forward rule is still active.
+  when:
+    - sync_previous_endpoint_ip | length > 0
+    - sync_previous_endpoint_ip != sync_endpoint_ip
+
+- name: Commit the endpoint transition state
+  ansible.builtin.copy:
+    content: "{{ sync_endpoint_ip }}\n"
+    dest: "{{ sync_state_path }}"
+    owner: root
+    group: root
+    mode: "0600"

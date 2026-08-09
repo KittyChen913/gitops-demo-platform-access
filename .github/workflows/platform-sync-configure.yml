@@ -1,0 +1,134 @@
+name: "Platform Access endpoint SYNC"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 把 gitops-demo-infra 發布的 ArgoCD private endpoint 套進 Shared OpenVPN：
+# internal DNS host record、人員 group 的 access rule 與精確的 UFW forward 規則。
+#
+# 只能手動觸發，且刻意與 BASE 分開：SYNC 讀取
+# /gitops/<environment>/platform/argocd/ENDPOINT_IP，該 parameter 由 infra 的
+# private-network root 建立。BASE 部署時 endpoint 通常尚未存在，若把 SYNC 掛進
+# BASE 流程會必然失敗。正確順序為 BASE → infra apply → 本 workflow。
+#
+# 與 terraform-deploy.yml 共用同一個 concurrency group，避免 SYNC 與 BASE
+# 部署同時對同一台 VPN Server 做變更。
+# ──────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment to synchronize"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "platform-access-mutation"
+  cancel-in-progress: false
+
+jobs:
+  resolve-base:
+    name: "Resolve BASE infrastructure"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TERRAFORM_ROOT: terraform/environments/shared/base
+    outputs:
+      instance_id: ${{ steps.outputs.outputs.instance_id }}
+      firewall_id: ${{ steps.outputs.outputs.firewall_id }}
+      reserved_ip: ${{ steps.outputs.outputs.reserved_ip }}
+      admin_port: ${{ steps.outputs.outputs.admin_port }}
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+
+      - name: "Configure AWS credentials via OIDC"
+        uses: ./.github/actions/configure-aws-credentials
+        with:
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      - name: "Terraform init"
+        run: |
+          set -euo pipefail
+          backend="${RUNNER_TEMP}/backend.hcl"
+          jq -r --arg region "${AWS_REGION}" '.terraform_backend | "bucket = \"\(.bucket)\"\nkey = \"\(.key)\"\nregion = \"\($region)\"\nencrypt = \"\(.encrypt)\"\nuse_lockfile = \"\(.use_lockfile)\""' config/shared.json > "${backend}"
+          terraform -chdir="${TERRAFORM_ROOT}" init -input=false -lockfile=readonly -backend-config="${backend}"
+
+      - name: "Read BASE outputs"
+        id: outputs
+        run: |
+          set -euo pipefail
+          {
+            printf 'instance_id=%s\n' "$(terraform -chdir="${TERRAFORM_ROOT}" output -raw openvpn_instance_id)"
+            printf 'firewall_id=%s\n' "$(terraform -chdir="${TERRAFORM_ROOT}" output -raw openvpn_firewall_id)"
+            printf 'reserved_ip=%s\n' "$(terraform -chdir="${TERRAFORM_ROOT}" output -raw openvpn_reserved_ipv4)"
+            printf 'admin_port=%s\n' "$(jq -r '.linode.admin_port' config/shared.json)"
+          } >> "${GITHUB_OUTPUT}"
+
+  configure-sync:
+    name: "Configure SYNC [${{ inputs.environment }}]"
+    needs: resolve-base
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+
+      - name: "Open BASE access"
+        id: open
+        uses: ./.github/actions/open-base-access
+        with:
+          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
+          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
+          reserved-ip: ${{ needs.resolve-base.outputs.reserved_ip }}
+          admin-port: ${{ needs.resolve-base.outputs.admin_port }}
+          aws-account-id: ${{ secrets.AWS_ACCOUNT_ID }}
+
+      # endpoint 值不進 Git，也不主動寫進 summary 或 artifact；失敗診斷仍可能顯示該值。
+      # Resolver 只建立 mode 0600 暫存檔，隨 work-dir 由 Close BASE access 清除。
+      - name: "Resolve the ArgoCD endpoint contract"
+        id: endpoint
+        env:
+          WORK_DIR: ${{ steps.open.outputs.work-dir }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          umask 077
+          endpoint_file="${WORK_DIR}/sync-endpoint.json"
+          bash scripts/load-sync-endpoint.sh "${TARGET_ENVIRONMENT}" "${endpoint_file}"
+          printf 'endpoint_file=%s\n' "${endpoint_file}" >> "${GITHUB_OUTPUT}"
+
+      - name: "Apply endpoint SYNC"
+        env:
+          INVENTORY: ${{ steps.open.outputs.inventory-path }}
+          SYNC_ENDPOINT_FILE: ${{ steps.endpoint.outputs.endpoint_file }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set -euo pipefail
+          ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
+            ansible-playbook -i "${INVENTORY}" \
+              -e "sync_environment=${TARGET_ENVIRONMENT}" \
+              ansible/playbooks/configure-platform-access-sync.yml
+
+      - name: "Close BASE access"
+        if: always()
+        uses: ./.github/actions/close-base-access
+        with:
+          firewall-id: ${{ needs.resolve-base.outputs.firewall_id }}
+          instance-id: ${{ needs.resolve-base.outputs.instance_id }}
+          work-dir: ${{ steps.open.outputs.work-dir }}
+          runner-cidr: ${{ steps.open.outputs.runner-cidr }}

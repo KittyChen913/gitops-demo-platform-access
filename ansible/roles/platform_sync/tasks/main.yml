@@ -1,0 +1,5 @@
+---
+- ansible.builtin.import_tasks: preflight.yml
+- ansible.builtin.import_tasks: access.yml
+- ansible.builtin.import_tasks: firewall.yml
+- ansible.builtin.import_tasks: dns.yml

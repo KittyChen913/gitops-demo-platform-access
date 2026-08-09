@@ -1,0 +1,45 @@
+---
+# 只新增獨立的 endpoint 檔，不觸碰 BASE 的 platform-access-base.conf。
+# 後者由 dnsmasq role 以 template 管理，且其第一行明載 BASE 不含 endpoint
+# record，是刻意的設計聲明。
+#
+# validate 讓語法錯誤在寫入 dest 之前就失敗，dnsmasq 不會進入無法啟動的狀態。
+- name: Read the live endpoint DNS answer before reconciliation
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "@{{ internal_dns_server_ip }}"
+      - "{{ sync_endpoint_hostname }}"
+      - A
+  register: sync_dns_answer_before
+  changed_when: false
+  failed_when: false
+
+- name: Publish the ArgoCD endpoint host record
+  ansible.builtin.template:
+    src: platform-access-endpoint.conf.j2
+    dest: "{{ sync_dnsmasq_config_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+    validate: "dnsmasq --test --conf-file=%s"
+  register: sync_dns_template
+  notify:
+    - Validate dnsmasq configuration
+    - Restart dnsmasq
+
+# 上一次若在 template 寫入後、dnsmasq restart 前失敗，本次 template 會顯示
+# unchanged。Live answer 不符時仍要重新通知 handler，讓 retry 能自行修復。
+- name: Reconcile dnsmasq when the live endpoint answer is stale
+  ansible.builtin.debug:
+    msg: Reconciling dnsmasq for the endpoint transition.
+  changed_when: >-
+    sync_dns_template.changed or
+    sync_dns_answer_before.stdout | trim != sync_endpoint_ip
+  notify:
+    - Validate dnsmasq configuration
+    - Restart dnsmasq
+
+- name: Apply dnsmasq changes before verification
+  ansible.builtin.meta: flush_handlers

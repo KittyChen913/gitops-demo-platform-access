@@ -1,0 +1,52 @@
+---
+# UFW 的 forward 預設為 DROP，BASE 只放行 automation CIDR 到任意目的地。
+# 人員 group 的流量因此需要一條額外的 forward 規則，但同時以來源 CIDR
+# 與目的地 /32、單一 port 收窄，維持既有的隔離邊界：只開 ArgoCD 這一個
+# host:port，不給人員 group 通用的 public egress。
+#
+# Access Server 原生 NAT 負責 SNAT，這裡只處理 forward path，不新增
+# MASQUERADE，也不修改 runner SSH 與 Admin UI 的 ingress 規則。
+# Access Server authorization 先收斂，再建立新 UFW 規則，避免整個共用人員 CIDR
+# 在 authorization 尚未套用時出現短暫可達窗口。舊規則等新路徑完整驗證後才由
+# finalize.yml 移除；中途失敗時 transition state 不會前進，重跑會繼續收斂。
+- name: Create the endpoint transition state directory
+  ansible.builtin.file:
+    path: "{{ sync_state_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Initialize the endpoint transition state
+  ansible.builtin.copy:
+    content: "{{ sync_previous_endpoint_ip }}\n"
+    dest: "{{ sync_state_path }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+
+- name: Allow authorized VPN groups to reach the ArgoCD endpoint
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - route
+      - allow
+      - out
+      - "on"
+      - "{{ openvpn_public_interface }}"
+      - from
+      - "{{ sync_client_cidr }}"
+      - to
+      - "{{ sync_endpoint_ip }}"
+      - port
+      - "{{ sync_endpoint_port }}"
+      - proto
+      - "{{ sync_endpoint_protocol }}"
+  register: sync_ufw_endpoint_allow
+  changed_when: >-
+    'Skipping adding existing rule' not in sync_ufw_endpoint_allow.stdout
+  notify: Reload UFW
+
+- name: Apply firewall changes before verification
+  ansible.builtin.meta: flush_handlers

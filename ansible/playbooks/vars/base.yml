@@ -20,6 +20,7 @@ openvpn_client_cidrs:
   - "{{ openvpn_automation_cidr }}"
 openvpn_server_tunnel_ip: "{{ platform_config.network.internal_dns_ip }}"
 internal_dns_server_ip: "{{ platform_config.network.internal_dns_ip }}"
+internal_domain: "{{ platform_config.network.internal_domain }}"
 upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"
 openvpn_admin_port: "{{ platform_config.linode.admin_port }}"
 openvpn_port: "{{ platform_config.linode.openvpn_port }}"

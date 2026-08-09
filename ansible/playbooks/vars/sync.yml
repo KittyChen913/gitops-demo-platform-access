@@ -1,0 +1,55 @@
+---
+# SYNC 專屬變數。BASE 變數仍由 vars/base.yml 提供，兩者一起載入，
+# 讓 SYNC 沿用既有的 interface 探測、群組契約與 sudo 解鎖流程。
+#
+# sync_environment 由 playbook 的 -e sync_environment=dev|prod 指定。
+# 兩份授權矩陣都載入，讓任一環境的 SYNC 都能驗證 index 與另一環境的
+# authorization boundary，不只檢查當次檔案。
+sync_contracts:
+  dev: >-
+    {{ lookup('ansible.builtin.file',
+    playbook_dir ~ '/../../config/environments/dev.json') | from_json }}
+  prod: >-
+    {{ lookup('ansible.builtin.file',
+    playbook_dir ~ '/../../config/environments/prod.json') | from_json }}
+sync_contract: "{{ sync_contracts.get(sync_environment, {}) }}"
+sync_endpoint: >-
+  {{ lookup('ansible.builtin.file',
+  lookup('ansible.builtin.env', 'SYNC_ENDPOINT_FILE')) | from_json }}
+sync_endpoint_ip: "{{ sync_endpoint.endpoint_ip }}"
+sync_endpoint_cidr: "{{ sync_endpoint.endpoint_cidr }}"
+sync_endpoint_hostname: "{{ sync_endpoint.endpoint_hostname }}"
+sync_endpoint_port: 443
+sync_endpoint_protocol: tcp
+
+# Access Server 的 API 只能以 index 表達多條 access rule。Index 由 environment
+# 唯一推導，不再讓兩份 config 各自宣告而形成 collision 來源。
+sync_access_to_indices:
+  dev: 0
+  prod: 1
+sync_access_to_index: "{{ sync_access_to_indices.get(sync_environment, -1) }}"
+sync_access_to_key: "access_to.{{ sync_access_to_index }}"
+sync_other_environment: "{{ 'prod' if sync_environment == 'dev' else 'dev' }}"
+sync_other_access_to_key: >-
+  access_to.{{ sync_access_to_indices.get(sync_other_environment, -1) }}
+sync_access_to_value: >-
+  +NAT:{{ sync_endpoint_ip }}:{{ sync_endpoint_protocol }}/{{ sync_endpoint_port }}
+sync_previous_access_to_value: >-
+  {{ ('+NAT:' ~ sync_previous_endpoint_ip ~ ':' ~ sync_endpoint_protocol ~ '/' ~
+      sync_endpoint_port) if sync_previous_endpoint_ip | default('') | length > 0
+     else '' }}
+
+sync_authorized_groups: "{{ sync_contract.get('authorized_groups', []) }}"
+sync_unauthorized_groups: >-
+  {{ openvpn_access_groups | difference(sync_authorized_groups) }}
+sync_other_authorized_groups: >-
+  {{ sync_contracts.get(sync_other_environment, {}).get('authorized_groups', []) }}
+
+# 人員帳號隸屬 access-groups.json 的三個 group，位址取自 group default pool。
+# UFW forward 規則以此 CIDR 為來源，不放行整個 tunnel CIDR。
+sync_client_cidr: "{{ openvpn_group_default_cidr }}"
+sync_dnsmasq_config_path: >-
+  /etc/dnsmasq.d/platform-access-endpoint-{{ sync_environment }}.conf
+sync_state_directory: /var/lib/gitops-demo-platform-access
+sync_state_path: >-
+  {{ sync_state_directory }}/platform-sync-{{ sync_environment }}.state

@@ -1,0 +1,21 @@
+---
+# 只做唯讀驗證，不套用任何變更。可在 SYNC 之後獨立重跑，用來確認
+# endpoint DNS record、group access rule、native NAT 與 UFW forward
+# 規則是否仍與 config/environments/<env>.json 的契約一致。
+- name: Verify Platform Access endpoint SYNC
+  hosts: openvpn_servers
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - vars/base.yml
+    - vars/sync.yml
+
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+      tags: always
+
+  tasks:
+    - ansible.builtin.include_role:
+        name: platform_sync
+        tasks_from: verify

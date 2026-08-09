@@ -13,6 +13,9 @@
   no_log: true
   tags: server-settings
 
+# dhcp_option.domain 推送 internal domain 作為 client 的 search domain。
+# 少了它，Windows 會平行對多個介面的 resolver 送出查詢，公網 resolver 先回
+# NXDOMAIN 時可能勝出，內部 hostname 因此間歇性解析失敗（split-DNS 外洩）。
 - name: Define BASE-only split-tunnel settings
   ansible.builtin.set_fact:
     openvpn_base_settings:
@@ -22,6 +25,7 @@
       vpn.client.routing.reroute_gw: "false"
       vpn.client.routing.reroute_dns: custom
       vpn.server.dhcp_option.dns.0: "{{ internal_dns_server_ip }}"
+      vpn.server.dhcp_option.domain: "{{ internal_domain }}"
       vpn.server.routing.gateway_access: "true"
       vpn.server.routing.private_access: nat
   tags: server-settings

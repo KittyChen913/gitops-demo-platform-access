@@ -1,0 +1,169 @@
+---
+# SYNC 的所有輸入都在此一次驗完，任何不符即在 mutation 前 fail closed。
+# 特別檢查 environment 三處一致（呼叫參數、environment config、endpoint JSON），
+# 避免 Dev 與 Prod 的 contract 交叉套用。
+- name: Refuse an unsupported SYNC environment
+  ansible.builtin.assert:
+    that:
+      - sync_environment in ['dev', 'prod']
+      - sync_access_to_index | int in [0, 1]
+      - sync_contract.environment == sync_environment
+      - sync_endpoint.environment == sync_environment
+    fail_msg: The SYNC environment is unsupported or inconsistent across inputs.
+
+- name: Refuse an invalid environment authorization contract
+  ansible.builtin.assert:
+    that:
+      - item.value.schema_version is integer
+      - item.value.schema_version == 1
+      - item.value.environment == item.key
+      - item.value.authorized_groups is sequence
+      - item.value.authorized_groups is not string
+      - item.value.authorized_groups | length > 0
+      - >-
+        item.value.authorized_groups | unique | length ==
+        item.value.authorized_groups | length
+      - >-
+        item.value.authorized_groups |
+        difference(openvpn_access_groups) | length == 0
+    fail_msg: >-
+      An environment authorization contract is invalid.
+  loop: "{{ sync_contracts | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Refuse an incomplete combined group authorization contract
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_contracts.dev.authorized_groups +
+         sync_contracts.prod.authorized_groups) | unique | sort ==
+        openvpn_access_groups | sort
+      - sync_authorized_groups | intersect(sync_unauthorized_groups) | length == 0
+    fail_msg: The combined authorization contract does not cover BASE groups exactly.
+
+- name: Refuse an endpoint that does not match the internal domain contract
+  ansible.builtin.assert:
+    that:
+      - >-
+        sync_endpoint_hostname ==
+        'argocd.' ~ sync_environment ~ '.internal.' ~
+        platform_config.network.internal_domain
+      - sync_endpoint_cidr == sync_endpoint_ip ~ '/32'
+      - sync_endpoint_port | int == 443
+      - sync_endpoint_protocol == 'tcp'
+    fail_msg: The endpoint contract is invalid for a VPN-only ArgoCD entry.
+
+# Endpoint transition 使用獨立 runtime state。DNS 檔只負責 DNS desired state，
+# 不再同時充當 firewall state，避免它先被 template 覆寫後永久遺失舊 IP。
+- name: Inspect the endpoint transition state
+  ansible.builtin.stat:
+    path: "{{ sync_state_path }}"
+    follow: false
+  register: sync_state_stat
+
+- name: Refuse an unsafe endpoint transition state file
+  ansible.builtin.assert:
+    that:
+      - not (sync_state_stat.stat.islnk | default(false))
+      - not sync_state_stat.stat.exists or sync_state_stat.stat.isreg
+    fail_msg: The endpoint transition state path is not a regular file.
+
+- name: Read the endpoint transition state
+  ansible.builtin.slurp:
+    src: "{{ sync_state_path }}"
+  register: sync_previous_state
+  when: sync_state_stat.stat.exists
+
+- name: Inspect the legacy endpoint DNS record
+  ansible.builtin.stat:
+    path: "{{ sync_dnsmasq_config_path }}"
+    follow: false
+  register: sync_legacy_dns_stat
+  when: not sync_state_stat.stat.exists
+
+- name: Refuse an unsafe legacy endpoint DNS record
+  ansible.builtin.assert:
+    that:
+      - not (sync_legacy_dns_stat.stat.islnk | default(false))
+      - sync_legacy_dns_stat.stat.isreg | default(false)
+    fail_msg: The legacy endpoint DNS record must be a regular file and not a symlink.
+  when:
+    - not sync_state_stat.stat.exists
+    - sync_legacy_dns_stat.stat.exists | default(false)
+
+- name: Read the legacy endpoint DNS record for first-run migration
+  ansible.builtin.slurp:
+    src: "{{ sync_dnsmasq_config_path }}"
+  register: sync_legacy_dns_record
+  when:
+    - not sync_state_stat.stat.exists
+    - sync_legacy_dns_stat.stat.exists | default(false)
+
+- name: Record the previously published endpoint address
+  ansible.builtin.set_fact:
+    sync_previous_endpoint_ip: >-
+      {{ (sync_previous_state.content | default('') | b64decode | trim)
+         if sync_state_stat.stat.exists
+         else (sync_legacy_dns_record.content | default('') | b64decode
+               | regex_search(
+                   '^host-record=' ~ (sync_endpoint_hostname | regex_escape) ~
+                   ',([0-9]{1,3}(?:\.[0-9]{1,3}){3})$',
+                   '\1', multiline=True)
+               | default([], true) | first | default('')) }}
+
+- name: Refuse an invalid previous endpoint address
+  ansible.builtin.assert:
+    that:
+      - >-
+        sync_previous_endpoint_ip == '' or
+        sync_previous_endpoint_ip is match('^([0-9]{1,3}\.){3}[0-9]{1,3}$')
+      - >-
+        sync_previous_endpoint_ip == '' or
+        sync_previous_endpoint_ip.split('.') | map('int') | max <= 255
+    fail_msg: The previous endpoint transition state is invalid.
+
+- name: Refuse an endpoint that is not a public IPv4 address
+  ansible.builtin.assert:
+    that:
+      - >-
+        sync_endpoint_ip is match(
+        '^(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2})){3}$')
+      - sync_endpoint_octets | length == 4
+      - sync_endpoint_octets | map('int') | max <= 255
+      - sync_endpoint_octets[0] | int != 0
+      - sync_endpoint_octets[0] | int != 10
+      - sync_endpoint_octets[0] | int != 127
+      - sync_endpoint_octets[0] | int < 224
+      - not (sync_endpoint_octets[0] | int == 100 and
+             sync_endpoint_octets[1] | int >= 64 and
+             sync_endpoint_octets[1] | int <= 127)
+      - not (sync_endpoint_octets[0] | int == 192 and
+             sync_endpoint_octets[1] | int == 0 and
+             sync_endpoint_octets[2] | int == 0)
+      - not (sync_endpoint_octets[0] | int == 192 and
+             sync_endpoint_octets[1] | int == 0 and
+             sync_endpoint_octets[2] | int == 2)
+      - not (sync_endpoint_octets[0] | int == 192 and
+             sync_endpoint_octets[1] | int == 88 and
+             sync_endpoint_octets[2] | int == 99)
+      - not (sync_endpoint_octets[0] | int == 192 and
+             sync_endpoint_octets[1] | int == 168)
+      - not (sync_endpoint_octets[0] | int == 169 and
+             sync_endpoint_octets[1] | int == 254)
+      - not (sync_endpoint_octets[0] | int == 172 and
+             sync_endpoint_octets[1] | int >= 16 and
+             sync_endpoint_octets[1] | int <= 31)
+      - not (sync_endpoint_octets[0] | int == 198 and
+             sync_endpoint_octets[1] | int in [18, 19])
+      - not (sync_endpoint_octets[0] | int == 198 and
+             sync_endpoint_octets[1] | int == 51 and
+             sync_endpoint_octets[2] | int == 100)
+      - not (sync_endpoint_octets[0] | int == 203 and
+             sync_endpoint_octets[1] | int == 0 and
+             sync_endpoint_octets[2] | int == 113)
+    fail_msg: >-
+      The endpoint address is not a public IPv4 address and may overlap the
+      VPN address space.
+  vars:
+    sync_endpoint_octets: "{{ sync_endpoint_ip.split('.') }}"

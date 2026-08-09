@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "environment": "dev",
+  "authorized_groups": ["dev-ops", "platform-ops"]
+}

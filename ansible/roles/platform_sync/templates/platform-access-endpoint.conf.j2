@@ -1,0 +1,6 @@
+# Managed by gitops-demo-platform-access SYNC ({{ sync_environment }}).
+# ArgoCD private entry 的 internal-only host record。
+# BASE 的 platform-access-base.conf 刻意不含任何 endpoint record，因此每個
+# 環境的 record 各自寫在這個獨立檔案，Dev 與 Prod 不共用同一份設定。
+# 不建立任何 Public DNS record；解析只在 tunnel 內的 resolver 上成立。
+host-record={{ sync_endpoint_hostname }},{{ sync_endpoint_ip }}

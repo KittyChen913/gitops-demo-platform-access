@@ -1,0 +1,33 @@
+---
+# Dev／Prod ArgoCD private entry 的 SYNC 套用。
+#
+# 與 BASE 分開觸發，不掛進 configure-platform-access-base.yml：SYNC 需要
+# gitops-demo-infra 發布的 ENDPOINT_IP，而該值要到 infra 的 private-network
+# root apply 之後才存在；掛進 BASE 流程會在 endpoint 尚未建立時必然失敗。
+#
+# 環境以 -e sync_environment=dev|prod 指定，endpoint 實際值由
+# scripts/load-sync-endpoint.sh 讀 SSM 後寫入 SYNC_ENDPOINT_FILE 指向的暫存檔。
+- name: Configure Platform Access endpoint SYNC
+  hosts: openvpn_servers
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - vars/base.yml
+    - vars/sync.yml
+
+  pre_tasks:
+    - ansible.builtin.import_tasks: tasks/base-pretasks.yml
+      tags: always
+
+  roles:
+    - platform_sync
+
+  post_tasks:
+    - ansible.builtin.meta: flush_handlers
+    - ansible.builtin.include_role:
+        name: platform_sync
+        tasks_from: verify
+    - ansible.builtin.include_role:
+        name: platform_sync
+        tasks_from: finalize
