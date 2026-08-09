@@ -18,7 +18,7 @@
 - 優先沿用現有 Shell 與 workflow `run` block；不得建立不必要的 helper、adapter、framework 或跨 Repo library。
 - 不維護 Unit Test、mock、fixture、fake adapter 或 test-only helper。
 - `config/shared.json` 是 Shared BASE 的 canonical configuration；`config/environments/<environment>.json` 只保存對應環境 SYNC 的授權 group，不得複製可由 environment 與 Shared config 推導的 SSM path、hostname、port、protocol 或 index。
-- Dev 與 Prod 的 SYNC contract 不得交叉：`access_to` 索引由 environment 唯一推導，未授權的 group 必須驗證所有 `access_to.*` 都沒有該 endpoint 規則。
+- Dev 與 Prod 的 SYNC contract 不得交叉：`access_to` 索引依各 group 的授權環境順序緊密排列，不得產生空洞；未授權的 group 必須驗證所有 `access_to.*` 都沒有該 endpoint 規則。
 - Credential、Secret、Terraform state、plan JSON 與 private key 不得輸出到 log、summary 或 artifact。
 - Runtime 操作必須維持 runner `/32`、strict host-key pin、baseline cleanup 與 fail-closed 行為。
 

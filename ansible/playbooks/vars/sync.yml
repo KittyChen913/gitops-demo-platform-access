@@ -22,16 +22,11 @@ sync_endpoint_hostname: "{{ sync_endpoint.endpoint_hostname }}"
 sync_endpoint_port: 443
 sync_endpoint_protocol: tcp
 
-# Access Server 的 API 只能以 index 表達多條 access rule。Index 由 environment
-# 唯一推導，不再讓兩份 config 各自宣告而形成 collision 來源。
-sync_access_to_indices:
-  dev: 0
-  prod: 1
-sync_access_to_index: "{{ sync_access_to_indices.get(sync_environment, -1) }}"
-sync_access_to_key: "access_to.{{ sync_access_to_index }}"
+# Access Server 可能把 access_to 自動整理成連續 index，因此不能讓未授權環境
+# 在 group 內留下空洞。DNS 固定為前綴，endpoint 再依該 group 的授權環境順序
+# 緊密排列；實際 per-group key 由 preflight 推導。
+sync_environment_order: [dev, prod]
 sync_other_environment: "{{ 'prod' if sync_environment == 'dev' else 'dev' }}"
-sync_other_access_to_key: >-
-  access_to.{{ sync_access_to_indices.get(sync_other_environment, -1) }}
 sync_access_to_value: >-
   +NAT:{{ sync_endpoint_ip }}:{{ sync_endpoint_protocol }}/{{ sync_endpoint_port }}
 sync_previous_access_to_value: >-

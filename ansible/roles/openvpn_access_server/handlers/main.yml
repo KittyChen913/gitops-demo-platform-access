@@ -2,5 +2,6 @@
 - name: Apply Access Server changes
   ansible.builtin.command:
     argv: [/usr/local/openvpn_as/scripts/sacli, start]
+  register: openvpn_access_server_apply_result
   changed_when: true
   no_log: true

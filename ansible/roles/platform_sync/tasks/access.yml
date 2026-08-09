@@ -52,8 +52,8 @@
   loop_control:
     label: "{{ item }}"
 
-# 本 Repository 擁有三個人員 group 的 network policy，因此只接受兩個已保留的
-# access_to index，並拒絕 automation 使用的廣域 `/1` 規則。未知 index 不自動
+# 本 Repository 擁有三個人員 group 的 network policy，因此只接受最多四條連續
+# access_to rule，並拒絕 automation 使用的廣域 `/1` 規則。未知 index 不自動
 # 刪除，直接 fail closed，避免把人工或其他 owner 的設定靜默覆蓋。
 - name: Refuse unexpected or broad human group access rules
   ansible.builtin.assert:
@@ -62,7 +62,14 @@
         (sync_group_properties[item] | dict2items
          | selectattr('key', 'match', '^access_to\.')
          | map(attribute='key') | list
-         | difference(['access_to.0', 'access_to.1'])) | length == 0
+         | difference(openvpn_human_access_to_keys)) | length == 0
+      - >-
+        (sync_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='key') | sort | list) ==
+        openvpn_human_access_to_keys[0:
+          (sync_group_properties[item] | dict2items
+           | selectattr('key', 'match', '^access_to\.') | list | length)]
       - >-
         (sync_group_properties[item] | dict2items
          | selectattr('key', 'match', '^access_to\.')
@@ -73,27 +80,54 @@
   loop_control:
     label: "{{ item }}"
 
-- name: Refuse access in an environment where the group is unauthorized
+- name: Refuse SYNC when the BASE tunnel DNS rules are missing
   ansible.builtin.assert:
     that:
       - >-
-        (item not in sync_other_authorized_groups and
-         (sync_group_properties[item][sync_other_access_to_key] | default('')) == '')
+        (sync_group_properties[item.0].get(item.1.key, '') | string) ==
+        (item.1.value | string)
+    fail_msg: >-
+      A BASE tunnel DNS access rule is missing; apply BASE before running SYNC.
+  loop: >-
+    {{ openvpn_access_groups |
+       product(openvpn_human_dns_access_rules | dict2items) | list }}
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1.key }}"
+
+- name: Refuse access outside the per-group environment key contract
+  ansible.builtin.assert:
+    that:
+      - >-
+        (item not in sync_other_authorized_groups)
         or
         (item in sync_other_authorized_groups and
          ((sync_group_properties[item][sync_other_access_to_key] | default('')) == '' or
           ((sync_group_properties[item][sync_other_access_to_key] |
             default('')) is match('^\+NAT:([0-9]{1,3}\.){3}[0-9]{1,3}:tcp/443$'))))
       - >-
-        sync_access_to_value not in
-        (sync_group_properties[item] | dict2items
-         | selectattr('key', 'match', '^access_to\.')
-         | rejectattr('key', 'equalto', sync_access_to_key)
-         | map(attribute='value') | list)
+        (item in sync_authorized_groups and
+         sync_access_to_value not in
+         (sync_group_properties[item] | dict2items
+          | selectattr('key', 'match', '^access_to\.')
+          | rejectattr('key', 'equalto', sync_access_to_key)
+          | map(attribute='value') | list))
+        or
+        (item not in sync_authorized_groups and
+         ((sync_group_properties[item] | dict2items
+          | selectattr('key', 'match', '^access_to\.')
+          | rejectattr('key', 'equalto', sync_access_to_key)
+          | map(attribute='value') | list
+          | intersect(
+              [sync_access_to_value, sync_previous_access_to_value]))
+          | reject('equalto', '') | list | length == 0))
     fail_msg: A group holds endpoint access outside its authorization contract.
   loop: "{{ openvpn_access_groups }}"
   loop_control:
     label: "{{ item }}"
+  vars:
+    sync_access_to_key: "{{ sync_group_access_to_keys[item][sync_environment] }}"
+    sync_other_access_to_key: >-
+      {{ sync_group_access_to_keys[item][sync_other_environment] }}
 
 # Endpoint rebuild 只可覆寫本 environment 上一次成功完成 transition 的值。
 # 不再接受任意「長得像 NAT/443」的規則，避免 Dev/Prod index collision 被誤判安全。
@@ -105,9 +139,11 @@
         ['', sync_access_to_value, sync_previous_access_to_value]
     fail_msg: >-
       The reserved access_to index already holds an unrelated rule.
-  loop: "{{ openvpn_access_groups }}"
+  loop: "{{ sync_authorized_groups }}"
   loop_control:
     label: "{{ item }}"
+  vars:
+    sync_access_to_key: "{{ sync_group_access_to_keys[item][sync_environment] }}"
 
 # 只授權單一 host 的 TCP/443，不使用 0.0.0.0/1 這類全網段寫法：人員需要的是
 # 一扇門，不是一條通道。automation identity 取得全網段是既有的已知妥協，
@@ -119,7 +155,7 @@
       - --user
       - "{{ item }}"
       - --key
-      - "{{ sync_access_to_key }}"
+      - "{{ sync_group_access_to_keys[item][sync_environment] }}"
       - --value
       - "{{ sync_access_to_value }}"
       - UserPropPut
@@ -127,7 +163,8 @@
   loop_control:
     label: "{{ item }}"
   when: >-
-    (sync_group_properties[item][sync_access_to_key] | default('')) !=
+    (sync_group_properties[item]
+     [sync_group_access_to_keys[item][sync_environment]] | default('')) !=
     sync_access_to_value
   notify: Apply Access Server changes
 
@@ -139,13 +176,20 @@
       - --user
       - "{{ item }}"
       - --key
-      - "{{ sync_access_to_key }}"
+      - "{{ sync_group_access_to_keys[item][sync_environment] }}"
       - UserPropDel
   loop: "{{ sync_unauthorized_groups }}"
   loop_control:
     label: "{{ item }}"
-  when: >-
-    (sync_group_properties[item][sync_access_to_key] | default('')) | length > 0
+  when:
+    - sync_candidate_access_to_value | length > 0
+    - >-
+      sync_candidate_access_to_value in
+      [sync_access_to_value, sync_previous_access_to_value]
+  vars:
+    sync_candidate_access_to_value: >-
+      {{ sync_group_properties[item]
+         [sync_group_access_to_keys[item][sync_environment]] | default('') }}
   notify: Apply Access Server changes
 
 # 若前一次在 UserPropPut 後、sacli start 前失敗，property 已可能等於 desired

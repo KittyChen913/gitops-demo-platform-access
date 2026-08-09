@@ -22,6 +22,17 @@ openvpn_server_tunnel_ip: "{{ platform_config.network.internal_dns_ip }}"
 internal_dns_server_ip: "{{ platform_config.network.internal_dns_ip }}"
 internal_domain: "{{ platform_config.network.internal_domain }}"
 upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"
+# Runtime baseline 已確認 group client 可 ping tunnel DNS，但 DNS query 會 timeout；
+# 因此以明確的 per-port ACL 補齊 DNS traffic contract。UDP 負責一般查詢，TCP
+# 則保留給截斷回覆與大型 DNS response。
+openvpn_human_dns_access_rules:
+  access_to.0: "+NAT:{{ internal_dns_server_ip }}:udp/53"
+  access_to.1: "+NAT:{{ internal_dns_server_ip }}:tcp/53"
+openvpn_human_access_to_keys:
+  - access_to.0
+  - access_to.1
+  - access_to.2
+  - access_to.3
 openvpn_admin_port: "{{ platform_config.linode.admin_port }}"
 openvpn_port: "{{ platform_config.linode.openvpn_port }}"
 openvpn_protocol: "{{ platform_config.linode.openvpn_protocol }}"

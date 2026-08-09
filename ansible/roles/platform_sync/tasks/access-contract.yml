@@ -1,0 +1,65 @@
+---
+- name: Initialize per-group access rule contracts
+  ansible.builtin.set_fact:
+    sync_group_access_to_keys: >-
+      {{ sync_group_access_to_keys | default({}) | combine({item: {}}) }}
+    sync_group_managed_access_to_keys: >-
+      {{ sync_group_managed_access_to_keys | default({}) |
+         combine({item: openvpn_human_dns_access_rules.keys() | list}) }}
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: sync-access-contract
+
+# 未授權環境也需要 candidate key，才能辨識授權矩陣變更前可能留下的 stale rule。
+# Prod 只有在同一個 group 也授權 Dev 時才排在下一格。
+- name: Derive contiguous per-group endpoint access keys
+  ansible.builtin.set_fact:
+    sync_group_access_to_keys: >-
+      {{ sync_group_access_to_keys |
+         combine({
+           item.0: sync_group_access_to_keys[item.0] |
+             combine({
+               item.1: 'access_to.' ~
+                 ((openvpn_human_dns_access_rules | length) +
+                  (1 if item.1 == 'prod' and
+                        item.0 in sync_contracts.dev.authorized_groups
+                   else 0))
+             })
+         }) }}
+  loop: "{{ openvpn_access_groups | product(sync_environment_order) | list }}"
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1 }}"
+  tags: sync-access-contract
+
+- name: Record authorized endpoint keys in each group contract
+  ansible.builtin.set_fact:
+    sync_group_managed_access_to_keys: >-
+      {{ sync_group_managed_access_to_keys |
+         combine({
+           item.0: sync_group_managed_access_to_keys[item.0] +
+             [sync_group_access_to_keys[item.0][item.1]]
+         }) }}
+  loop: "{{ openvpn_access_groups | product(sync_environment_order) | list }}"
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1 }}"
+  when: item.0 in sync_contracts[item.1].authorized_groups
+  tags: sync-access-contract
+
+- name: Verify every derived group contract is contiguous and unambiguous
+  ansible.builtin.assert:
+    that:
+      - sync_group_access_to_keys[item].keys() | list | sort ==
+        sync_environment_order | sort
+      - >-
+        sync_group_managed_access_to_keys[item] | unique | length ==
+        sync_group_managed_access_to_keys[item] | length
+      - >-
+        sync_group_managed_access_to_keys[item] ==
+        openvpn_human_access_to_keys[0:
+          sync_group_managed_access_to_keys[item] | length]
+    fail_msg: The derived per-group access rule contract is invalid.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: sync-access-contract

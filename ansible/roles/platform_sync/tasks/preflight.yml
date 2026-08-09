@@ -6,7 +6,7 @@
   ansible.builtin.assert:
     that:
       - sync_environment in ['dev', 'prod']
-      - sync_access_to_index | int in [0, 1]
+      - sync_environment_order == ['dev', 'prod']
       - sync_contract.environment == sync_environment
       - sync_endpoint.environment == sync_environment
     fail_msg: The SYNC environment is unsupported or inconsistent across inputs.
@@ -41,6 +41,10 @@
         openvpn_access_groups | sort
       - sync_authorized_groups | intersect(sync_unauthorized_groups) | length == 0
     fail_msg: The combined authorization contract does not cover BASE groups exactly.
+
+- name: Derive the per-group access rule contract
+  ansible.builtin.import_tasks: access-contract.yml
+  tags: always
 
 - name: Refuse an endpoint that does not match the internal domain contract
   ansible.builtin.assert:

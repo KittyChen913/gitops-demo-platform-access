@@ -140,6 +140,74 @@
   notify: Apply Access Server changes
   tags: access-groups
 
+# group default pool 與 tunnel DNS 不在同一個 CIDR；runtime 已證明 gateway 可達，
+# 但 DNS query 仍會 timeout，因此不能只依賴 dhcp_option.dns.0 與 gateway_access。
+# DNS rule 屬於所有人員 group 共用且不依賴 endpoint 的 BASE contract，因此不交
+# 給環境 SYNC 管理。
+- name: Refuse an invalid existing human group access rule structure
+  ansible.builtin.assert:
+    that:
+      - >-
+        (openvpn_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='key') | list
+         | difference(openvpn_human_access_to_keys)) | length == 0
+      - >-
+        (openvpn_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='key') | sort | list) ==
+        openvpn_human_access_to_keys[0:
+          (openvpn_group_properties[item] | dict2items
+           | selectattr('key', 'match', '^access_to\.') | list | length)]
+      - >-
+        (openvpn_group_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | rejectattr('key', 'in', openvpn_human_dns_access_rules.keys() | list)
+         | map(attribute='value')
+         | reject('match', '^\+NAT:([0-9]{1,3}\.){3}[0-9]{1,3}:tcp/443$')
+         | list | length) == 0
+    fail_msg: The existing human group access rule structure is invalid.
+  loop: "{{ openvpn_access_groups }}"
+  loop_control:
+    label: "{{ item }}"
+  tags: access-groups
+
+- name: Refuse to overwrite unrelated BASE tunnel DNS access rules
+  ansible.builtin.assert:
+    that:
+      - >-
+        (openvpn_group_properties[item.0].get(item.1.key, '') | string) in
+        ['', item.1.value | string]
+    fail_msg: The reserved BASE tunnel DNS index holds an unrelated rule.
+  loop: >-
+    {{ openvpn_access_groups |
+       product(openvpn_human_dns_access_rules | dict2items) | list }}
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1.key }}"
+  tags: access-groups
+
+- name: Allow every BASE group to query tunnel DNS
+  ansible.builtin.command:
+    argv:
+      - /usr/local/openvpn_as/scripts/sacli
+      - --user
+      - "{{ item.0 }}"
+      - --key
+      - "{{ item.1.key }}"
+      - --value
+      - "{{ item.1.value }}"
+      - UserPropPut
+  loop: >-
+    {{ openvpn_access_groups |
+       product(openvpn_human_dns_access_rules | dict2items) | list }}
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1.key }}"
+  when: >-
+    (openvpn_group_properties[item.0].get(item.1.key, '') | string) !=
+    (item.1.value | string)
+  notify: Apply Access Server changes
+  tags: access-groups
+
 - name: Read OpenVPN administrator properties
   ansible.builtin.command:
     argv:
@@ -190,3 +258,20 @@
 - name: Apply administrator identity changes before authentication
   ansible.builtin.meta: flush_handlers
   tags: admin-identity
+
+# access-groups 由獨立 playbook invocation 套用；先執行已通知的 handler，避免
+# 後面的 recovery start 與 play 結束時的 handler 重複執行。
+- name: Apply access group changes before recovery check
+  ansible.builtin.meta: flush_handlers
+  tags: access-groups
+
+# 上次執行若在 UserPropPut 後、handler 前中斷，stored property 會已符合 desired
+# value，重跑時不會再次通知 handler。access-groups 無 handler 執行結果時補一次
+# sacli start；server-settings 的無變更重跑不需要這個 recovery 行為。
+- name: Reapply stored BASE properties after an interrupted run
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, start]
+  when: openvpn_access_server_apply_result is not defined
+  changed_when: false
+  no_log: true
+  tags: access-groups

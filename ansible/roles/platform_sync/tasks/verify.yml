@@ -1,4 +1,8 @@
 ---
+- name: Rebuild the per-group access rule contract
+  ansible.builtin.import_tasks: access-contract.yml
+  tags: always
+
 # 套用後重新查詢實際值再比對。OpenVPN Access Server 的 per-group access rule
 # 行為在本部署尚未經 runtime 驗證，因此不信任「指令執行成功」本身，一律以
 # 回讀結果為準；不符即失敗，不做猜測或重試。
@@ -54,32 +58,53 @@
         (sync_verify_properties[item] | dict2items
          | selectattr('key', 'match', '^access_to\.')
          | map(attribute='key') | list
-         | difference(['access_to.0', 'access_to.1'])) | length == 0
+         | difference(sync_group_managed_access_to_keys[item])) | length == 0
+      - >-
+        (sync_verify_properties[item] | dict2items
+         | selectattr('key', 'match', '^access_to\.')
+         | map(attribute='key') | sort | list) ==
+        openvpn_human_access_to_keys[0:
+          (sync_verify_properties[item] | dict2items
+           | selectattr('key', 'match', '^access_to\.') | list | length)]
       - >-
         (sync_verify_properties[item] | dict2items
          | selectattr('key', 'match', '^access_to\.')
          | map(attribute='value') | list
          | intersect(['+NAT:0.0.0.0/1', '+NAT:128.0.0.0/1'])) | length == 0
-      - >-
-        (item in sync_other_authorized_groups) or
-        (sync_verify_properties[item][sync_other_access_to_key] | default('')) == ''
     fail_msg: A human group violates the access rule structure.
   loop: "{{ openvpn_access_groups }}"
   loop_control:
     label: "{{ item }}"
   tags: verify-sync
 
+- name: Verify every human group retains the BASE tunnel DNS rules
+  ansible.builtin.assert:
+    that:
+      - >-
+        (sync_verify_properties[item.0].get(item.1.key, '') | string) ==
+        (item.1.value | string)
+    fail_msg: A human group is missing a BASE tunnel DNS access rule.
+  loop: >-
+    {{ openvpn_access_groups |
+       product(openvpn_human_dns_access_rules | dict2items) | list }}
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1.key }}"
+  tags: verify-sync
+
 - name: Verify authorized groups hold exactly the endpoint rule
   ansible.builtin.assert:
     that:
       - >-
-        (sync_verify_properties[item][sync_access_to_key] | default('')) ==
+        (sync_verify_properties[item]
+         [sync_group_access_to_keys[item][sync_environment]] | default('')) ==
         sync_access_to_value
       - >-
         sync_access_to_value not in
         (sync_verify_properties[item] | dict2items
          | selectattr('key', 'match', '^access_to\.')
-         | rejectattr('key', 'equalto', sync_access_to_key)
+         | rejectattr(
+             'key', 'equalto',
+             sync_group_access_to_keys[item][sync_environment])
          | map(attribute='value') | list)
     fail_msg: >-
       An authorized group is missing the ArgoCD endpoint access rule.
@@ -91,8 +116,6 @@
 - name: Verify groups outside this environment hold no endpoint rule
   ansible.builtin.assert:
     that:
-      - >-
-        (sync_verify_properties[item][sync_access_to_key] | default('')) == ''
       - >-
         sync_access_to_value not in
         (sync_verify_properties[item] | dict2items
