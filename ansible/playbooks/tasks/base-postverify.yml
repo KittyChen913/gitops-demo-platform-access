@@ -118,6 +118,15 @@
     label: "{{ item.0 }}:{{ item.1.key }}"
   tags: verify-openvpn
 
+- name: Verify the tunnel DNS firewall interface pattern
+  ansible.builtin.assert:
+    that:
+      - openvpn_tunnel_interface is match('^as0t[0-9]+$')
+      - openvpn_tunnel_interface_pattern == 'as0t+'
+      - openvpn_tunnel_interface_pattern != openvpn_public_interface
+    fail_msg: The tunnel DNS firewall interface pattern is invalid.
+  tags: verify-dns-exposure
+
 - name: Read active tunnel DNS firewall rules
   ansible.builtin.command:
     argv: [iptables, -S, ufw-user-input]
@@ -125,6 +134,8 @@
   changed_when: false
   tags: verify-dns-exposure
 
+# 只允許 as0t+ wildcard 規則存在。negative assert 比對 as0t[0-9]+ 而非當下探測
+# 到的單一介面名，才能同時抓出過去 apply 留下的其他 as0tN 殘留規則。
 - name: Verify every VPN address pool can enter the tunnel DNS firewall rules
   ansible.builtin.assert:
     that:
@@ -134,12 +145,22 @@
         | select('search', '(^| )-d ' ~
                  ((internal_dns_server_ip ~ '/32') | regex_escape) ~ '($| )')
         | select('search', '(^| )-i ' ~
-                 (openvpn_tunnel_interface | regex_escape) ~ '($| )')
+                 (openvpn_tunnel_interface_pattern | regex_escape) ~ '($| )')
         | select('search', '(^| )-p ' ~ (item.1 | regex_escape) ~ '($| )')
         | select('search', '(^| )--dport 53($| )')
         | select('search', '(^| )-j ACCEPT($| )')
         | list | length == 1
-    fail_msg: A tunnel DNS firewall rule is missing or duplicated.
+      - >-
+        base_verify_dns_firewall_rules.stdout_lines
+        | select('search', '(^| )-s ' ~ (item.0 | regex_escape) ~ '($| )')
+        | select('search', '(^| )-d ' ~
+                 ((internal_dns_server_ip ~ '/32') | regex_escape) ~ '($| )')
+        | select('search', '(^| )-i as0t[0-9]+($| )')
+        | select('search', '(^| )-p ' ~ (item.1 | regex_escape) ~ '($| )')
+        | select('search', '(^| )--dport 53($| )')
+        | select('search', '(^| )-j ACCEPT($| )')
+        | list | length == 0
+    fail_msg: A tunnel DNS firewall rule is missing, duplicated, or legacy.
   loop: "{{ openvpn_client_cidrs | product(['udp', 'tcp']) | list }}"
   loop_control:
     label: "{{ item.0 }}:{{ item.1 }}"

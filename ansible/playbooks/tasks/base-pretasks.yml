@@ -84,6 +84,9 @@
   ansible.builtin.set_fact:
     openvpn_tunnel_interface: >-
       {{ tunnel_interface_result.stdout.split()[1] }}
+    openvpn_tunnel_interface_pattern: >-
+      {{ tunnel_interface_result.stdout.split()[1] |
+         regex_replace('[0-9]+$', '+') }}
     openvpn_public_interface: >-
       {{ public_interface_result.stdout.split()[4] }}
 

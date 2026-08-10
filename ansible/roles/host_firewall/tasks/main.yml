@@ -17,6 +17,15 @@
       is installed.
   tags: always
 
+- name: Refuse an unsafe tunnel firewall interface pattern
+  ansible.builtin.assert:
+    that:
+      - openvpn_tunnel_interface is match('^as0t[0-9]+$')
+      - openvpn_tunnel_interface_pattern == 'as0t+'
+      - openvpn_tunnel_interface_pattern != openvpn_public_interface
+    fail_msg: The OpenVPN tunnel firewall interface pattern is invalid.
+  tags: apply-firewall-rules
+
 - name: Remove Marketplace public web exceptions not owned by BASE
   ansible.builtin.command:
     argv: [ufw, --force, delete, allow, "{{ item }}/tcp"]
@@ -58,7 +67,7 @@
       - allow
       - in
       - "on"
-      - "{{ openvpn_tunnel_interface }}"
+      - "{{ openvpn_tunnel_interface_pattern }}"
       - from
       - "{{ item.0 }}"
       - to
@@ -72,6 +81,40 @@
     label: "{{ item.0 }}:{{ item.1 }}"
   register: ufw_dns_allow
   changed_when: "'Skipping adding existing rule' not in ufw_dns_allow.stdout"
+  notify: Reload UFW
+  tags: apply-firewall-rules
+
+# 舊版只允許持有 DNS IP 的 as0t0，但 client traffic 可能由其他 as0tN 進入。
+# 先建立 wildcard rule 再移除舊規則，避免部署期間中斷既有 DNS traffic。
+# ufw 刪除不存在的規則時只印訊息並回傳 0，不是非零 rc；因此 changed 必須以
+# stdout 訊息判定，rc 只用來偵測真正的失敗，否則每次重跑都會誤報 changed 並
+# 觸發不必要的 ufw reload。
+- name: Remove legacy single-interface tunnel DNS rules
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - --force
+      - delete
+      - allow
+      - in
+      - "on"
+      - "{{ openvpn_tunnel_interface }}"
+      - from
+      - "{{ item.0 }}"
+      - to
+      - "{{ internal_dns_server_ip }}"
+      - port
+      - "53"
+      - proto
+      - "{{ item.1 }}"
+  loop: "{{ openvpn_client_cidrs | product(['udp', 'tcp']) | list }}"
+  loop_control:
+    label: "{{ item.0 }}:{{ item.1 }}"
+  register: ufw_legacy_dns_allow_removal
+  changed_when: >-
+    'Could not delete non-existent rule' not in
+    ufw_legacy_dns_allow_removal.stdout
+  failed_when: ufw_legacy_dns_allow_removal.rc != 0
   notify: Reload UFW
   tags: apply-firewall-rules
 
