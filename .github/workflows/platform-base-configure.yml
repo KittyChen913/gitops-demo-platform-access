@@ -220,6 +220,8 @@ jobs:
           state-directory: ${{ steps.automation-vpn-verify.outputs['state-directory'] }}
 
       # Marketplace 產生的 Linux 密碼以 SSM escrow 提供 SRE break-glass 使用；
+      # 它只供登入後 sudo 與 LISH console，不會啟用 SSH password authentication；
+      # direct VM SSH 仍只接受 credential-bootstrap 管理的 SSH key。
       # deployment Role 只需寫入，日常 workflow 不讀回該參數。
       # escrow 只是輔助能力，必須排在所有 BASE 設定與驗證之後，避免 IAM 或
       # SSH 問題把 BASE configuration 本身一起擋掉。

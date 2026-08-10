@@ -41,6 +41,7 @@ resource "linode_firewall" "openvpn" {
   }
 }
 
+# Direct VM SSH 只宣告 public key；vpnadmin Linux password 不啟用 SSH password authentication。
 resource "linode_instance" "openvpn" {
   label            = var.label
   region           = var.region
