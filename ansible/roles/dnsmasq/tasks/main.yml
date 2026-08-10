@@ -10,7 +10,7 @@
 - name: Atomically manage BASE dnsmasq configuration
   ansible.builtin.template:
     src: platform-access-base.conf.j2
-    dest: /etc/dnsmasq.d/platform-access-base.conf
+    dest: "{{ dnsmasq_base_config_path }}"
     owner: root
     group: root
     mode: "0644"
@@ -25,4 +25,63 @@
     name: dnsmasq
     enabled: true
     state: started
+  tags: configure
+
+# 這裡只負責本次 binding migration：若 template 寫入後、restart 前失敗，舊 daemon
+# 仍持有契約外 listener，下次 configure 會再次通知 handlers。上游 server 或 record
+# 等不影響 listener 的設定，仍由各自的 template notify／runtime verification 負責。
+- name: Read the running dnsmasq listeners before reconciliation
+  ansible.builtin.command:
+    argv: [ss, -H, -lntup]
+  register: dnsmasq_listeners_before
+  changed_when: false
+  tags: configure
+
+- name: Refuse DNS listeners without process ownership metadata
+  ansible.builtin.assert:
+    that:
+      - >-
+        (dnsmasq_listeners_before.stdout_lines
+         | select('search', ':53\\b')
+         | reject('search', dns_listener_process_metadata_pattern)
+         | list | length) == 0
+    fail_msg: A DNS listener is missing process ownership metadata.
+  tags: configure
+
+- name: Reconcile dnsmasq when the running binding state is stale
+  ansible.builtin.debug:
+    msg: Reconciling dnsmasq for the BASE DNS binding contract.
+  changed_when: >-
+    (dnsmasq_listeners_before.stdout_lines
+     | select('search', ':53\\b')
+     | select('search', dnsmasq_listener_process_pattern)
+     | reject('search', '(^|\\s)127\\.0\\.0\\.1:53(\\s|$)')
+     | reject('search', '(^|\\s)' ~
+              (internal_dns_server_ip | regex_escape) ~ ':53(\\s|$)')
+     | list | length) != 0 or
+    (dnsmasq_listeners_before.stdout_lines
+     | select('match', '^udp\\s+')
+     | select('search', '(^|\\s)' ~
+              (internal_dns_server_ip | regex_escape) ~ ':53(\\s|$)')
+     | select('search', dnsmasq_listener_process_pattern)
+     | list | length) != 1 or
+    (dnsmasq_listeners_before.stdout_lines
+     | select('match', '^tcp\\s+')
+     | select('search', '(^|\\s)' ~
+              (internal_dns_server_ip | regex_escape) ~ ':53(\\s|$)')
+     | select('search', dnsmasq_listener_process_pattern)
+     | list | length) != 1 or
+    (dnsmasq_listeners_before.stdout_lines
+     | select('match', '^udp\\s+')
+     | select('search', '(^|\\s)127\\.0\\.0\\.1:53(\\s|$)')
+     | select('search', dnsmasq_listener_process_pattern)
+     | list | length) != 1 or
+    (dnsmasq_listeners_before.stdout_lines
+     | select('match', '^tcp\\s+')
+     | select('search', '(^|\\s)127\\.0\\.0\\.1:53(\\s|$)')
+     | select('search', dnsmasq_listener_process_pattern)
+     | list | length) != 1
+  notify:
+    - Validate dnsmasq configuration
+    - Restart dnsmasq
   tags: configure

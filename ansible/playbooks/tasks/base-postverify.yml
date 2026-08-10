@@ -22,33 +22,109 @@
     fail_msg: The BASE split-DNS domain is not active.
   tags: verify-openvpn
 
+# 使用 Ubuntu package 與 systemd ExecStartPre 相同的入口，讓 validation 讀取主機
+# /etc/default/dnsmasq 的實際 CONFIG_DIR 與 DNSMASQ_OPTS。
 - name: Verify dnsmasq configuration
   ansible.builtin.command:
-    argv: [dnsmasq, --test]
+    argv:
+      - /usr/share/dnsmasq/systemd-helper
+      - checkconfig
   changed_when: false
   tags: verify-dnsmasq
 
+- name: Read the managed BASE dnsmasq exposure configuration
+  ansible.builtin.slurp:
+    src: "{{ dnsmasq_base_config_path }}"
+  register: base_verify_dnsmasq_config
+  tags: verify-dns-exposure
+
+# dnsmasq 的 config parser 會先 strip 行首空白、把所有 whitespace 正規化成空白，
+# 並允許 "=" 前後帶空白，因此 "  interface = as0t0" 這種寫法一樣會生效。regex 必須
+# 一起容忍這些變體，否則 drift 檢查會漏掉真正被套用的 directive。
+# 這裡用 [^\S\n] 而不是 [ \t]：後者的 \t 經過 Jinja 字串處理後不會可靠地比對到 tab。
+- name: Refuse a pinned or publicly exposed BASE DNS binding
+  ansible.builtin.assert:
+    that:
+      - >-
+        (base_verify_dnsmasq_config.content | b64decode) is not
+        regex('(?mi)^[^\\S\\n]*interface[^\\S\\n]*=')
+      - >-
+        (base_verify_dnsmasq_config.content | b64decode) is
+        regex('(?m)^[^\\S\\n]*except-interface[^\\S\\n]*=[^\\S\\n]*' ~
+              (openvpn_public_interface | regex_escape) ~ '[^\\S\\n]*$')
+      - >-
+        (base_verify_dnsmasq_config.content | b64decode) is
+        regex('(?m)^[^\\S\\n]*listen-address[^\\S\\n]*=[^\\S\\n]*' ~
+              (internal_dns_server_ip | regex_escape) ~ '[^\\S\\n]*$')
+      - >-
+        (base_verify_dnsmasq_config.content | b64decode) is
+        regex('(?m)^[^\\S\\n]*listen-address[^\\S\\n]*=[^\\S\\n]*' ~
+              '127\\.0\\.0\\.1[^\\S\\n]*$')
+    fail_msg: The BASE DNS binding is pinned or publicly exposed.
+  tags: verify-dns-exposure
+
 - name: Read active listeners
   ansible.builtin.command:
-    argv: [ss, -lntup]
+    argv: [ss, -H, -lntup]
   register: listeners
   changed_when: false
   tags: verify-dns-exposure
 
-- name: Refuse public or wildcard DNS listener
+# interface= 會讓 dnsmasq 一併監聽 lo 的 ::1 與 tunnel interface 的 IPv6 link-local。
+# 全域拒絕 wildcard，但 IPv6 與精確位址集合只限制 dnsmasq，避免誤擋 systemd-resolved
+# 合法的 loopback listener。必要 listener 同時要求精確 process metadata；若 ss -p 無法
+# 提供 owner，assertion 會 fail closed。
+- name: Refuse public, wildcard, or IPv6 DNS listener
   ansible.builtin.assert:
     that:
       - >-
         listeners.stdout is not
         regex('(?m)(0\\.0\\.0\\.0|\\[::\\]|\\*):53\\b')
       - >-
-        listeners.stdout is
-        regex('(?m)^udp\\s+.*' ~
-              (internal_dns_server_ip | regex_escape) ~ ':53\\b')
+        (listeners.stdout_lines
+         | select('search', ':53\\b')
+         | reject('search', dns_listener_process_metadata_pattern)
+         | list | length) == 0
       - >-
-        listeners.stdout is
-        regex('(?m)^tcp\\s+.*' ~
-              (internal_dns_server_ip | regex_escape) ~ ':53\\b')
+        (listeners.stdout_lines
+         | select('search', dnsmasq_listener_process_pattern)
+         | select('search', ':53\\b')
+         | select('search', '\\[[0-9a-fA-F:]+\\]\\S*:53\\b')
+         | list | length) == 0
+      - >-
+        (listeners.stdout_lines
+         | select('search', ':53\\b')
+         | select('search', dnsmasq_listener_process_pattern)
+         | reject('search', '(^|\\s)127\\.0\\.0\\.1:53(\\s|$)')
+         | reject('search', '(^|\\s)' ~
+                  (internal_dns_server_ip | regex_escape) ~ ':53(\\s|$)')
+         | list | length) == 0
+      - >-
+        (listeners.stdout_lines
+         | select('match', '^udp\\s+')
+         | select('search', '(^|\\s)' ~
+                  (internal_dns_server_ip | regex_escape) ~ ':53(\\s|$)')
+         | select('search', dnsmasq_listener_process_pattern)
+         | list | length) == 1
+      - >-
+        (listeners.stdout_lines
+         | select('match', '^tcp\\s+')
+         | select('search', '(^|\\s)' ~
+                  (internal_dns_server_ip | regex_escape) ~ ':53(\\s|$)')
+         | select('search', dnsmasq_listener_process_pattern)
+         | list | length) == 1
+      - >-
+        (listeners.stdout_lines
+         | select('match', '^udp\\s+')
+         | select('search', '(^|\\s)127\\.0\\.0\\.1:53(\\s|$)')
+         | select('search', dnsmasq_listener_process_pattern)
+         | list | length) == 1
+      - >-
+        (listeners.stdout_lines
+         | select('match', '^tcp\\s+')
+         | select('search', '(^|\\s)127\\.0\\.0\\.1:53(\\s|$)')
+         | select('search', dnsmasq_listener_process_pattern)
+         | list | length) == 1
     fail_msg: The tunnel DNS listener bind or exposure contract is invalid.
   tags: verify-dns-exposure
 

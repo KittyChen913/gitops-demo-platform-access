@@ -22,6 +22,11 @@ openvpn_server_tunnel_ip: "{{ platform_config.network.internal_dns_ip }}"
 internal_dns_server_ip: "{{ platform_config.network.internal_dns_ip }}"
 internal_domain: "{{ platform_config.network.internal_domain }}"
 upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"
+dnsmasq_base_config_path: /etc/dnsmasq.d/platform-access-base.conf
+# ss -p 的 process 欄位必須精確辨識 dnsmasq；若 metadata 缺失，必要 listener 的
+# assertion 會 fail closed，不得只依位址推定 owner。
+dns_listener_process_metadata_pattern: 'users:\(\('
+dnsmasq_listener_process_pattern: 'users:\(\("dnsmasq",pid='
 # Runtime baseline 已確認 group client 可 ping tunnel DNS，但 DNS query 會 timeout；
 # 因此以明確的 per-port ACL 補齊 DNS traffic contract。UDP 負責一般查詢，TCP
 # 則保留給截斷回覆與大型 DNS response。

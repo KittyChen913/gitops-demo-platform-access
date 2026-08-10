@@ -1,7 +1,11 @@
 ---
+# 使用 Ubuntu package 與 systemd ExecStartPre 相同的入口，讓 validation 從
+# /etc/default/dnsmasq 讀取實際 CONFIG_DIR 與 DNSMASQ_OPTS，避免複製 package default。
 - name: Validate dnsmasq configuration
   ansible.builtin.command:
-    argv: [dnsmasq, --test]
+    argv:
+      - /usr/share/dnsmasq/systemd-helper
+      - checkconfig
   changed_when: false
 
 - name: Restart dnsmasq
