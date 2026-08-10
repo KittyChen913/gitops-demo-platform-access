@@ -219,6 +219,74 @@ jobs:
         with:
           state-directory: ${{ steps.automation-vpn-verify.outputs['state-directory'] }}
 
+      # Marketplace 產生的 Linux 密碼以 SSM escrow 提供 SRE break-glass 使用；
+      # deployment Role 只需寫入，日常 workflow 不讀回該參數。
+      # escrow 只是輔助能力，必須排在所有 BASE 設定與驗證之後，避免 IAM 或
+      # SSH 問題把 BASE configuration 本身一起擋掉。
+      - name: "Escrow VPN administrator console password"
+        env:
+          INSTANCE_ID: ${{ needs.resolve-base.outputs.instance_id }}
+          RESERVED_IP: ${{ needs.resolve-base.outputs.reserved_ip }}
+          WORK_DIR: ${{ steps.open.outputs.work-dir }}
+        run: |
+          set -euo pipefail
+          umask 077
+          config="${GITHUB_WORKSPACE}/config/shared.json"
+          ssh_user="$(jq -r '.linode.automation_username' "${config}")"
+          parameter_path="$(jq -r '.aws.ssm_parameter_paths.vpnadmin_sudo_password' "${config}")"
+          test -d "${WORK_DIR}"
+          password_file="$(mktemp "${WORK_DIR}/vpnadmin-sudo-password.XXXXXX")"
+          request_file="$(mktemp "${WORK_DIR}/vpnadmin-sudo-request.XXXXXX")"
+          cleanup() {
+            unset vpnadmin_password 2>/dev/null || true
+            rm -f "${password_file}" "${request_file}"
+          }
+          trap cleanup EXIT
+
+          test "${ssh_user}" = "vpnadmin"
+          test "${parameter_path}" = \
+            "/gitops/platform-access/openvpn/break-glass/VPNADMIN_SUDO_PASSWORD"
+          [[ "${INSTANCE_ID}" =~ ^[0-9]+$ ]]
+
+          ssh \
+            -i "${WORK_DIR}/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            -o IdentitiesOnly=yes \
+            -o ServerAliveCountMax=1 \
+            -o ServerAliveInterval=5 \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="${WORK_DIR}/known_hosts" \
+            "${ssh_user}@${RESERVED_IP}" \
+            'set -eu; count="$(grep -c "^Sudo Password:" "$HOME/.credentials")"; test "${count}" -eq 1; sed -n "s/^Sudo Password:[[:space:]]*//p" "$HOME/.credentials" | tr -d "\r\n"' \
+            > "${password_file}"
+
+          test -f "${password_file}"
+          test ! -L "${password_file}"
+          chmod 600 "${password_file}"
+          vpnadmin_password="$(<"${password_file}")"
+          # 遮罩前先逸出百分號，否則 runner 反跳脫後會註冊到錯誤的字串。
+          echo "::add-mask::${vpnadmin_password//%/%25}"
+          test -n "${vpnadmin_password}"
+          # base-pretasks 以 `\S+` 解析同一個欄位；含空白的密碼會讓兩邊語意不一致。
+          [[ "${vpnadmin_password}" != *[[:space:]]* ]]
+          unset vpnadmin_password
+
+          # `--cli-input-json` 的 file:// 語意明確，且密碼不會出現在 process arguments。
+          jq -n \
+            --arg name "${parameter_path}" \
+            --arg description \
+              "Break-glass login credential for ${ssh_user} on Linode instance ${INSTANCE_ID}." \
+            --rawfile value "${password_file}" \
+            '{Name: $name, Description: $description, Type: "SecureString", Value: $value, Overwrite: true}' \
+            > "${request_file}"
+          chmod 600 "${request_file}"
+
+          aws ssm put-parameter --cli-input-json "file://${request_file}" >/dev/null
+
+          trap - EXIT
+          cleanup
+
       - name: "Close BASE access"
         if: always()
         uses: ./.github/actions/close-base-access

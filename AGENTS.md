@@ -20,6 +20,7 @@
 - `config/shared.json` 是 Shared BASE 的 canonical configuration；`config/environments/<environment>.json` 只保存對應環境 SYNC 的授權 group，不得複製可由 environment 與 Shared config 推導的 SSM path、hostname、port、protocol 或 index。
 - Dev 與 Prod 的 SYNC contract 不得交叉：`access_to` 索引依各 group 的授權環境順序緊密排列，不得產生空洞；未授權的 group 必須驗證所有 `access_to.*` 都沒有該 endpoint 規則。
 - Credential、Secret、Terraform state、plan JSON 與 private key 不得輸出到 log、summary 或 artifact。
+- `vpnadmin` Linux password 只作為 SRE break-glass credential，以 SSM `SecureString` escrow；deployment Role 只可寫入／刪除，日常 workflow 不得讀回，讀取權限只授予指定 SRE Role。escrow step 必須排在 BASE configuration 與所有驗證之後，不得成為其他設定步驟的前置條件；密碼只以 `--cli-input-json` 傳給 AWS CLI，不得出現在 process arguments。
 - Runtime 操作必須維持 runner `/32`、strict host-key pin、baseline cleanup 與 fail-closed 行為。
 
 ## 安全與破壞性操作

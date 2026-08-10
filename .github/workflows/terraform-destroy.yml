@@ -210,5 +210,21 @@ jobs:
             rm -f "${runtime_cleanup_error}"
           done
 
+          break_glass_parameter_path="$(
+            jq -r '.aws.ssm_parameter_paths.vpnadmin_sudo_password' "${config}"
+          )"
+          test "${break_glass_parameter_path}" = \
+            "/gitops/platform-access/openvpn/break-glass/VPNADMIN_SUDO_PASSWORD"
+          if ! aws ssm delete-parameter \
+            --name "${break_glass_parameter_path}" \
+            >/dev/null 2>"${runtime_cleanup_error}" &&
+            ! grep -q 'ParameterNotFound' "${runtime_cleanup_error}"; then
+            echo "Unable to remove the retired VPN administrator credential." >&2
+            echo "BASE infrastructure is already destroyed and credential-bootstrap was left intact." >&2
+            echo "Grant ssm:DeleteParameter on the break-glass parameter, then re-run this workflow." >&2
+            exit 1
+          fi
+          rm -f "${runtime_cleanup_error}"
+
           credential_root="$(prepare_destroy_plan credential-bootstrap)"
           terraform -chdir="${credential_root}" apply -input=false "${bundle}/credential-bootstrap/terraform.tfplan"
