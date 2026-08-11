@@ -144,10 +144,11 @@
     fail_msg: The Access Server UDP DNS proxy listener is not active.
   tags: verify-dns-exposure
 
-# Access Server 的 DNS proxy process 名稱可能隨版本改變，因此不硬綁 python3。
-# systemd cgroup 才是穩定的 service ownership boundary；listener PID 必須屬於
-# openvpnas.service，不能只確認任意 process 佔用 UDP/953。
-- name: Record the Access Server UDP DNS proxy listener PID
+# Access Server 的 DNS proxy process 名稱與數量可能隨版本改變，因此不硬綁
+# python3 或單一 process。systemd cgroup 才是穩定的 service ownership boundary；
+# 所有 listener PID 都必須屬於 openvpnas.service，不能只確認任意 process 佔用
+# UDP/953。
+- name: Record the Access Server UDP DNS proxy listener PIDs
   ansible.builtin.set_fact:
     base_verify_dns_proxy_listener_pids: >-
       {{ listeners.stdout_lines
@@ -159,11 +160,11 @@
          | flatten | unique | list }}
   tags: verify-dns-exposure
 
-- name: Verify the Access Server UDP DNS proxy listener has one owner
+- name: Verify the Access Server UDP DNS proxy listener exposes an owner
   ansible.builtin.assert:
     that:
-      - base_verify_dns_proxy_listener_pids | length == 1
-    fail_msg: The Access Server UDP DNS proxy listener owner is ambiguous.
+      - base_verify_dns_proxy_listener_pids | length >= 1
+    fail_msg: The Access Server UDP DNS proxy listener owner is unavailable.
   tags: verify-dns-exposure
 
 - name: Read the Access Server systemd control group
@@ -178,23 +179,29 @@
   changed_when: false
   tags: verify-dns-exposure
 
-- name: Read the Access Server UDP DNS proxy listener cgroup
+- name: Read the Access Server UDP DNS proxy listener cgroups
   ansible.builtin.slurp:
-    src: "/proc/{{ base_verify_dns_proxy_listener_pids[0] }}/cgroup"
-  register: base_verify_dns_proxy_listener_cgroup
+    src: "/proc/{{ item }}/cgroup"
+  loop: "{{ base_verify_dns_proxy_listener_pids }}"
+  loop_control:
+    label: "{{ item }}"
+  register: base_verify_dns_proxy_listener_cgroups
   tags: verify-dns-exposure
 
-- name: Verify the UDP DNS proxy listener belongs to Access Server
+- name: Verify every UDP DNS proxy listener process belongs to Access Server
   ansible.builtin.assert:
     that:
       - (base_verify_openvpnas_control_group.stdout | trim | length) > 0
       - >-
-        (base_verify_dns_proxy_listener_cgroup.content | b64decode) is
+        (item.content | b64decode) is
         regex('(?m)(^|:)' ~
               (base_verify_openvpnas_control_group.stdout |
                trim | regex_escape) ~
               '(/[^\\s:]*)?$')
-    fail_msg: The UDP DNS proxy listener is not owned by Access Server.
+    fail_msg: A UDP DNS proxy listener process is not owned by Access Server.
+  loop: "{{ base_verify_dns_proxy_listener_cgroups.results }}"
+  loop_control:
+    label: "{{ item.item }}"
   tags: verify-dns-exposure
 
 # Host firewall 只允許 post-DNAT 的 UDP/953，因此整組 tunnel DNS contract 相依於
