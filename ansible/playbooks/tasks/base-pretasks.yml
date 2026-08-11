@@ -41,17 +41,40 @@
     path: /usr/local/openvpn_as/scripts/sacli
   register: openvpn_sacli
 
-- name: Refuse non-Marketplace or invalid BASE contract
+- name: Refuse missing Marketplace Access Server tools
   ansible.builtin.assert:
     that:
       - openvpn_sacli.stat.exists
       - openvpn_sacli.stat.executable
+    fail_msg: Marketplace Access Server tools are unavailable.
+
+- name: Read the Marketplace Access Server version
+  ansible.builtin.command:
+    argv: [/usr/local/openvpn_as/scripts/sacli, Version]
+  register: openvpn_access_server_version_query
+  changed_when: false
+
+- name: Record the Marketplace Access Server version
+  ansible.builtin.set_fact:
+    openvpn_access_server_version: >-
+      {{ openvpn_access_server_version_query.stdout |
+         regex_search('[0-9]+\.[0-9]+\.[0-9]+') | default('', true) }}
+
+- name: Refuse non-Marketplace or invalid BASE contract
+  ansible.builtin.assert:
+    that:
+      - openvpn_access_server_version | length > 0
+      - >-
+        openvpn_access_server_version is
+        version(openvpn_dns_proxy_upstream_minimum_version, '>=')
       - openvpn_admin_username == 'openvpn'
       - internal_dns_server_ip == openvpn_server_tunnel_ip
       - >-
         openvpn_access_groups ==
         ['dev-ops', 'prod-ops', 'platform-ops']
-    fail_msg: Shared BASE contract or Marketplace identity is invalid.
+    fail_msg: >-
+      Shared BASE contract, Marketplace identity, or Access Server DNS proxy
+      upstream capability is invalid.
   no_log: true
 
 - name: Verify openvpnas service is active

@@ -149,6 +149,36 @@
       The internal resolver does not return the published endpoint address.
   tags: verify-sync
 
+# VPN User 的一般 UDP/53 會由 Access Server DNAT 到 DNS proxy UDP/953。只查
+# dnsmasq UDP/53 會繞過這條 client-facing path，無法發現 proxy 使用 public
+# upstream 而對 internal hostname 回傳 NXDOMAIN 的問題。
+- name: Resolve the endpoint hostname through the Access Server DNS proxy
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - +time=5
+      - +tries=1
+      - -p
+      - "{{ openvpn_dns_proxy_udp_port }}"
+      - "@{{ internal_dns_server_ip }}"
+      - "{{ sync_endpoint_hostname }}"
+      - A
+  register: sync_dns_proxy_answer
+  changed_when: false
+  failed_when: false
+  tags: verify-sync
+
+- name: Verify the client-facing DNS proxy resolves the endpoint
+  ansible.builtin.assert:
+    that:
+      - sync_dns_proxy_answer.rc == 0
+      - sync_dns_proxy_answer.stdout | trim == sync_endpoint_ip
+    fail_msg: >-
+      The Access Server DNS proxy does not return the published endpoint
+      address through its configured dnsmasq upstream.
+  tags: verify-sync
+
 # 比照 base-postverify 的作法，直接確認規則存在於 ufw-user-forward chain，
 # 而不是解析 ufw status 的輸出格式。
 #

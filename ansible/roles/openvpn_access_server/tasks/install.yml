@@ -26,6 +26,10 @@
       vpn.client.routing.reroute_dns: custom
       vpn.server.dhcp_option.dns.0: "{{ internal_dns_server_ip }}"
       vpn.server.dhcp_option.domain: "{{ internal_domain }}"
+      # Access Server 3.2.1+ 的 DNS proxy 預設使用 Linux host resolver；這會讓
+      # internal-only record 被送往 public DNS 並回傳 NXDOMAIN。Proxy upstream
+      # 必須指回本機 dnsmasq，才能同時解析 internal record 與既有 public upstream。
+      dnsproxy.upstream_dns: "{{ internal_dns_server_ip }}"
       vpn.server.routing.gateway_access: "true"
       vpn.server.routing.private_access: nat
   tags: server-settings

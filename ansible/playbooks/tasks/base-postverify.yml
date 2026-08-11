@@ -13,13 +13,19 @@
   no_log: true
   tags: verify-openvpn
 
-- name: Verify the BASE split-DNS domain is active
+- name: Verify the BASE split-DNS and DNS proxy upstream are active
   ansible.builtin.assert:
     that:
       - >-
         (base_verify_config_query.stdout | from_json).get(
         'vpn.server.dhcp_option.domain', '') == internal_domain
-    fail_msg: The BASE split-DNS domain is not active.
+      - >-
+        (base_verify_config_query.stdout | from_json).get(
+        'vpn.server.dhcp_option.dns.0', '') == internal_dns_server_ip
+      - >-
+        (base_verify_config_query.stdout | from_json).get(
+        'dnsproxy.upstream_dns', '') == internal_dns_server_ip
+    fail_msg: The BASE split-DNS or DNS proxy upstream is not active.
   tags: verify-openvpn
 
 # 使用 Ubuntu package 與 systemd ExecStartPre 相同的入口，讓 validation 讀取主機
