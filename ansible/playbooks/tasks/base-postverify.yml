@@ -128,6 +128,106 @@
     fail_msg: The tunnel DNS listener bind or exposure contract is invalid.
   tags: verify-dns-exposure
 
+# DNS proxy listener 與 dnsmasq listener 適用相同契約：必須具備精確 process
+# metadata；若 ss -p 無法提供 owner，assertion 會 fail closed，不得只依位址推定。
+- name: Verify the Access Server UDP DNS proxy listener
+  ansible.builtin.assert:
+    that:
+      - >-
+        (listeners.stdout_lines
+         | select('match', '^udp\\s+')
+         | select('search', '(^|\\s)' ~
+                  (internal_dns_server_ip | regex_escape) ~ ':' ~
+                  (openvpn_dns_proxy_udp_port | regex_escape) ~ '(\\s|$)')
+         | select('search', dns_listener_process_metadata_pattern)
+         | list | length) == 1
+    fail_msg: The Access Server UDP DNS proxy listener is not active.
+  tags: verify-dns-exposure
+
+# Access Server 的 DNS proxy process 名稱可能隨版本改變，因此不硬綁 python3。
+# systemd cgroup 才是穩定的 service ownership boundary；listener PID 必須屬於
+# openvpnas.service，不能只確認任意 process 佔用 UDP/953。
+- name: Record the Access Server UDP DNS proxy listener PID
+  ansible.builtin.set_fact:
+    base_verify_dns_proxy_listener_pids: >-
+      {{ listeners.stdout_lines
+         | select('match', '^udp\\s+')
+         | select('search', '(^|\\s)' ~
+                  (internal_dns_server_ip | regex_escape) ~ ':' ~
+                  (openvpn_dns_proxy_udp_port | regex_escape) ~ '(\\s|$)')
+         | map('regex_findall', 'pid=([0-9]+)')
+         | flatten | unique | list }}
+  tags: verify-dns-exposure
+
+- name: Verify the Access Server UDP DNS proxy listener has one owner
+  ansible.builtin.assert:
+    that:
+      - base_verify_dns_proxy_listener_pids | length == 1
+    fail_msg: The Access Server UDP DNS proxy listener owner is ambiguous.
+  tags: verify-dns-exposure
+
+- name: Read the Access Server systemd control group
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - --property=ControlGroup
+      - --value
+      - openvpnas
+  register: base_verify_openvpnas_control_group
+  changed_when: false
+  tags: verify-dns-exposure
+
+- name: Read the Access Server UDP DNS proxy listener cgroup
+  ansible.builtin.slurp:
+    src: "/proc/{{ base_verify_dns_proxy_listener_pids[0] }}/cgroup"
+  register: base_verify_dns_proxy_listener_cgroup
+  tags: verify-dns-exposure
+
+- name: Verify the UDP DNS proxy listener belongs to Access Server
+  ansible.builtin.assert:
+    that:
+      - (base_verify_openvpnas_control_group.stdout | trim | length) > 0
+      - >-
+        (base_verify_dns_proxy_listener_cgroup.content | b64decode) is
+        regex('(?m)(^|:)' ~
+              (base_verify_openvpnas_control_group.stdout |
+               trim | regex_escape) ~
+              '(/[^\\s:]*)?$')
+    fail_msg: The UDP DNS proxy listener is not owned by Access Server.
+  tags: verify-dns-exposure
+
+# Host firewall 只允許 post-DNAT 的 UDP/953，因此整組 tunnel DNS contract 相依於
+# Access Server native nftables 仍把 client 的 UDP/53 重導至 DNS proxy port。這項
+# 相依必須一併驗證：DNAT 一旦消失，listener 與 firewall rule assertion 仍會通過，
+# 但 client 的 UDP/53 會落到 INPUT 預設 DROP，等同重現本次修正的失敗模式。
+- name: Read the Access Server DNS proxy NAT contract
+  ansible.builtin.command:
+    argv: [nft, list, table, ip, as_nat]
+  register: base_verify_dns_proxy_nat
+  changed_when: false
+  failed_when: false
+  tags: verify-dns-exposure
+
+- name: Verify client DNS is redirected to the Access Server DNS proxy port
+  ansible.builtin.assert:
+    that:
+      - base_verify_dns_proxy_nat.rc == 0
+      - >-
+        (base_verify_dns_proxy_nat.stdout_lines
+         | select('search', '(^|\\s)ip\\s+daddr\\s+' ~
+                  (internal_dns_server_ip | regex_escape) ~ '(\\s|$)')
+         | select('search', '(^|\\s)udp(\\s|$)')
+         | select('search', '(^|\\s)dport\\s+(53|domain)(\\s|$)')
+         | select('search', '(^|\\s)dnat\\s+to\\s+' ~
+                  (internal_dns_server_ip | regex_escape) ~ ':' ~
+                  (openvpn_dns_proxy_udp_port | regex_escape) ~ '(\\s|$)')
+         | list | length) >= 1
+    fail_msg: >-
+      The Access Server DNS proxy DNAT no longer matches the host firewall
+      post-DNAT port contract.
+  tags: verify-dns-exposure
+
 - name: Read BASE group properties for DNS verification
   ansible.builtin.command:
     argv:
@@ -210,8 +310,9 @@
   changed_when: false
   tags: verify-dns-exposure
 
-# 只允許 as0t+ wildcard 規則存在。negative assert 比對 as0t[0-9]+ 而非當下探測
-# 到的單一介面名，才能同時抓出過去 apply 留下的其他 as0tN 殘留規則。
+# 只允許 as0t+ wildcard 與 post-DNAT destination port 的規則存在。negative assert
+# 比對 as0t[0-9]+ 而非當下探測到的單一介面名，才能同時抓出過去 apply 留下的
+# 其他 as0tN 殘留規則。
 - name: Verify every VPN address pool can enter the tunnel DNS firewall rules
   ansible.builtin.assert:
     that:
@@ -222,8 +323,10 @@
                  ((internal_dns_server_ip ~ '/32') | regex_escape) ~ '($| )')
         | select('search', '(^| )-i ' ~
                  (openvpn_tunnel_interface_pattern | regex_escape) ~ '($| )')
-        | select('search', '(^| )-p ' ~ (item.1 | regex_escape) ~ '($| )')
-        | select('search', '(^| )--dport 53($| )')
+        | select('search', '(^| )-p ' ~
+                 (item.1.protocol | regex_escape) ~ '($| )')
+        | select('search', '(^| )--dport ' ~
+                 (item.1.port | regex_escape) ~ '($| )')
         | select('search', '(^| )-j ACCEPT($| )')
         | list | length == 1
       - >-
@@ -232,14 +335,37 @@
         | select('search', '(^| )-d ' ~
                  ((internal_dns_server_ip ~ '/32') | regex_escape) ~ '($| )')
         | select('search', '(^| )-i as0t[0-9]+($| )')
-        | select('search', '(^| )-p ' ~ (item.1 | regex_escape) ~ '($| )')
-        | select('search', '(^| )--dport 53($| )')
+        | select('search', '(^| )-p ' ~
+                 (item.1.protocol | regex_escape) ~ '($| )')
+        | select('search', '(^| )--dport ' ~
+                 (item.1.port | regex_escape) ~ '($| )')
         | select('search', '(^| )-j ACCEPT($| )')
         | list | length == 0
     fail_msg: A tunnel DNS firewall rule is missing, duplicated, or legacy.
-  loop: "{{ openvpn_client_cidrs | product(['udp', 'tcp']) | list }}"
+  loop: >-
+    {{ openvpn_client_cidrs |
+       product(openvpn_tunnel_dns_firewall_rules) | list }}
   loop_control:
-    label: "{{ item.0 }}:{{ item.1 }}"
+    label: "{{ item.0 }}:{{ item.1.protocol }}/{{ item.1.port }}"
+  tags: verify-dns-exposure
+
+- name: Refuse obsolete pre-DNAT UDP DNS firewall rules
+  ansible.builtin.assert:
+    that:
+      - >-
+        base_verify_dns_firewall_rules.stdout_lines
+        | select('search', '(^| )-s ' ~ (item | regex_escape) ~ '($| )')
+        | select('search', '(^| )-d ' ~
+                 ((internal_dns_server_ip ~ '/32') | regex_escape) ~ '($| )')
+        | select('search', '(^| )-i as0t([0-9]+|\\+)($| )')
+        | select('search', '(^| )-p udp($| )')
+        | select('search', '(^| )--dport 53($| )')
+        | select('search', '(^| )-j ACCEPT($| )')
+        | list | length == 0
+    fail_msg: An obsolete pre-DNAT UDP DNS firewall rule is still active.
+  loop: "{{ openvpn_client_cidrs }}"
+  loop_control:
+    label: "{{ item }}:udp/53"
   tags: verify-dns-exposure
 
 - name: Read IPv4 forwarding state

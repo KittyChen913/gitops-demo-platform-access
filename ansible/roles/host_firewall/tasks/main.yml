@@ -73,14 +73,48 @@
       - to
       - "{{ internal_dns_server_ip }}"
       - port
-      - "53"
+      - "{{ item.1.port }}"
       - proto
-      - "{{ item.1 }}"
-  loop: "{{ openvpn_client_cidrs | product(['udp', 'tcp']) | list }}"
+      - "{{ item.1.protocol }}"
+  loop: >-
+    {{ openvpn_client_cidrs |
+       product(openvpn_tunnel_dns_firewall_rules) | list }}
   loop_control:
-    label: "{{ item.0 }}:{{ item.1 }}"
+    label: "{{ item.0 }}:{{ item.1.protocol }}/{{ item.1.port }}"
   register: ufw_dns_allow
   changed_when: "'Skipping adding existing rule' not in ufw_dns_allow.stdout"
+  notify: Reload UFW
+  tags: apply-firewall-rules
+
+# Access Server 會在 native nftables PREROUTING 將 client UDP/53 DNAT 到本機
+# DNS proxy UDP/953。先建立 post-DNAT allow，再移除舊的 wildcard UDP/53 rule，
+# 避免部署期間中斷既有 DNS traffic。
+- name: Remove obsolete pre-DNAT wildcard UDP DNS rules
+  ansible.builtin.command:
+    argv:
+      - ufw
+      - --force
+      - delete
+      - allow
+      - in
+      - "on"
+      - "{{ openvpn_tunnel_interface_pattern }}"
+      - from
+      - "{{ item }}"
+      - to
+      - "{{ internal_dns_server_ip }}"
+      - port
+      - "53"
+      - proto
+      - udp
+  loop: "{{ openvpn_client_cidrs }}"
+  loop_control:
+    label: "{{ item }}:udp/53"
+  register: ufw_obsolete_dns_allow_removal
+  changed_when: >-
+    'Could not delete non-existent rule' not in
+    ufw_obsolete_dns_allow_removal.stdout
+  failed_when: ufw_obsolete_dns_allow_removal.rc != 0
   notify: Reload UFW
   tags: apply-firewall-rules
 

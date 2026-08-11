@@ -28,11 +28,19 @@ dnsmasq_base_config_path: /etc/dnsmasq.d/platform-access-base.conf
 dns_listener_process_metadata_pattern: 'users:\(\('
 dnsmasq_listener_process_pattern: 'users:\(\("dnsmasq",pid='
 # Runtime baseline 已確認 group client 可 ping tunnel DNS，但 DNS query 會 timeout；
-# 因此以明確的 per-port ACL 補齊 DNS traffic contract。UDP 負責一般查詢，TCP
-# 則保留給截斷回覆與大型 DNS response。
+# 因此以明確的 client-facing per-port ACL 補齊 DNS traffic contract。Access Server
+# 會把 client UDP/53 DNAT 至本機 DNS proxy UDP/953；TCP/53 則直接送達 dnsmasq。
 openvpn_human_dns_access_rules:
   access_to.0: "+NAT:{{ internal_dns_server_ip }}:udp/53"
   access_to.1: "+NAT:{{ internal_dns_server_ip }}:tcp/53"
+# Host firewall 位於 DNAT 之後，必須使用實際抵達 INPUT hook 的 destination port；
+# 不得把 client-facing access_to port 直接複製成 host firewall port。
+openvpn_dns_proxy_udp_port: "953"
+openvpn_tunnel_dns_firewall_rules:
+  - protocol: udp
+    port: "{{ openvpn_dns_proxy_udp_port }}"
+  - protocol: tcp
+    port: "53"
 openvpn_human_access_to_keys:
   - access_to.0
   - access_to.1
