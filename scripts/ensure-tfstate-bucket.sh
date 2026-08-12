@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 確保 Terraform remote state 使用的 S3 bucket 已存在且符合安全基線。
-# 部署順序改為 platform-access 先行之後，本 repo 成為第一個需要 remote
+# 部署順序改為 openvpn-dns 先行之後，本 repo 成為第一個需要 remote
 # backend 的 repository，不能再依賴 gitops-demo-cluster 的 bootstrap 先
 # 建立 bucket。
 #

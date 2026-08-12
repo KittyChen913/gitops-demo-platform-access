@@ -93,13 +93,13 @@ jobs:
           && yamllint -d relaxed --no-warnings .github/workflows ansible
           && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
           --syntax-check -i localhost,
-          ansible/playbooks/configure-platform-access-base.yml
+          ansible/playbooks/configure-openvpn-dns-base.yml
           && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
           --syntax-check -i localhost,
           ansible/playbooks/configure-automation-identities.yml
           && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
           --syntax-check -i localhost, -e sync_environment=dev
-          ansible/playbooks/configure-platform-access-sync.yml
+          ansible/playbooks/configure-openvpn-dns-sync.yml
           && ANSIBLE_CONFIG=ansible/ansible.cfg ansible-playbook
           --syntax-check -i localhost, -e sync_environment=dev
-          ansible/playbooks/verify-platform-access-sync.yml"
+          ansible/playbooks/verify-openvpn-dns-sync.yml"

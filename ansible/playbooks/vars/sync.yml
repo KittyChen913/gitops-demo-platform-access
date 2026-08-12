@@ -44,7 +44,7 @@ sync_other_authorized_groups: >-
 # UFW forward 規則以此 CIDR 為來源，不放行整個 tunnel CIDR。
 sync_client_cidr: "{{ openvpn_group_default_cidr }}"
 sync_dnsmasq_config_path: >-
-  /etc/dnsmasq.d/platform-access-endpoint-{{ sync_environment }}.conf
-sync_state_directory: /var/lib/gitops-demo-platform-access
+  /etc/dnsmasq.d/openvpn-dns-endpoint-{{ sync_environment }}.conf
+sync_state_directory: /var/lib/gitops-demo-openvpn-dns
 sync_state_path: >-
   {{ sync_state_directory }}/platform-sync-{{ sync_environment }}.state

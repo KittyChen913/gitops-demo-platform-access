@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# 讀取 gitops-demo-infra 發布的 ArgoCD private endpoint hand-off parameters，
+# 讀取 gitops-demo-argocd 發布的 ArgoCD private endpoint hand-off parameters，
 # 驗證形狀後輸出成 mode 0600 的 JSON，供 SYNC playbook 消費。
 #
 # 設計約束：
@@ -120,17 +120,17 @@ readonly ip_parameter="/gitops/${ENVIRONMENT}/platform/argocd/ENDPOINT_IP"
 readonly hostname_parameter="/gitops/${ENVIRONMENT}/platform/argocd/ENDPOINT_HOSTNAME"
 readonly EXPECTED_HOSTNAME="argocd.${ENVIRONMENT}.internal.${internal_domain}"
 
-# Endpoint parameters 由 gitops-demo-infra 的 private-network root 建立。
+# Endpoint parameters 由 gitops-demo-argocd 的 private-network root 建立。
 # 讀不到通常代表該 root 尚未 apply 或已被 destroy，此時不應繼續套用 SYNC。
 if ! endpoint_ip="$(aws ssm get-parameter --name "${ip_parameter}" --query Parameter.Value --output text 2>/dev/null)"; then
   echo "The endpoint IP parameter is unavailable: ${ip_parameter}" >&2
-  echo "Apply the private-network root in gitops-demo-infra before running SYNC." >&2
+  echo "Apply the private-network root in gitops-demo-argocd before running SYNC." >&2
   exit 1
 fi
 
 if ! endpoint_hostname="$(aws ssm get-parameter --name "${hostname_parameter}" --query Parameter.Value --output text 2>/dev/null)"; then
   echo "The endpoint hostname parameter is unavailable: ${hostname_parameter}" >&2
-  echo "Apply the private-network root in gitops-demo-infra before running SYNC." >&2
+  echo "Apply the private-network root in gitops-demo-argocd before running SYNC." >&2
   exit 1
 fi
 

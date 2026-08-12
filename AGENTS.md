@@ -1,14 +1,14 @@
 # AGENTS.md
 
-本文件適用於 `gitops-demo-platform-access`。
+本文件適用於 `gitops-demo-openvpn-dns`。
 
 ## Ownership
 
 - 本 Repository 擁有 Shared OpenVPN BASE、Reserved IPv4、VPN Server Firewall、Internal DNS、routing/NAT、一般 User groups、credential bootstrap、CI 自動化 VPN 身份與 network SSM outputs。
 - 不管理 LKE、Worker Firewall、ArgoCD、application manifests 或一般 VPN User lifecycle。
 - CI 自動化 VPN 身份綁定 consuming Repository，屬 credential bootstrap 的延伸；一般員工 User 的 onboard／offboard 與 email token lifecycle 仍由 `gitops-demo-user-provisioning` 管理。
-- Dev／Prod endpoint SYNC 由本 Repository 擁有：消費 `gitops-demo-infra` 發布的 `/gitops/<environment>/platform/argocd/{ENDPOINT_IP,ENDPOINT_HOSTNAME}`，建立 internal DNS host record、人員 group 的 endpoint access rule 與對應的 UFW forward 規則。人員 group 的 route／NAT／DNS 屬本 Repository，帳號與 group 指派仍屬 `gitops-demo-user-provisioning`。
-- SYNC 必須獨立觸發（`platform-sync-configure.yml`），不得掛進 BASE apply 流程：endpoint parameters 要到 `gitops-demo-infra` 的 private-network root apply 之後才存在。
+- Dev／Prod endpoint SYNC 由本 Repository 擁有：消費 `gitops-demo-argocd` 發布的 `/gitops/<environment>/platform/argocd/{ENDPOINT_IP,ENDPOINT_HOSTNAME}`，建立 internal DNS host record、人員 group 的 endpoint access rule 與對應的 UFW forward 規則。人員 group 的 route／NAT／DNS 屬本 Repository，帳號與 group 指派仍屬 `gitops-demo-user-provisioning`。
+- SYNC 必須獨立觸發（`openvpn-dns-sync-configure.yml`），不得掛進 BASE apply 流程：endpoint parameters 要到 `gitops-demo-argocd` 的 private-network root apply 之後才存在。
 - SYNC 的 runtime evidence boundary：程式碼可先完成，但在對應環境的 endpoint 實際存在前不得套用；`config/environments/<environment>.json` 之外不得出現 endpoint 的實際值。
 - 對人員 group default pool 的 SYNC traffic，Access Server 原生 NAT（`vpn.server.routing.private_access=nat`）是唯一的 SNAT owner。Automation static pool 仍由既有 `openvpn-automation-egress.service` 管理；SYNC 不得新增第二條人員流量 MASQUERADE 或 SNAT chain。
 
@@ -25,7 +25,7 @@
 
 ## 安全與破壞性操作
 
-- 不要主動執行 `terraform apply`，或手動觸發 `platform-base-configure.yml`、`terraform-deploy.yml`、`terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
+- 不要主動執行 `terraform apply`，或手動觸發 `openvpn-dns-base-configure.yml`、`terraform-deploy.yml`、`terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
 - destroy 只能由 `terraform-destroy.yml` 手動觸發，需輸入 `DESTROY-SHARED-ALL` 確認字串；apply 順序固定先 `base`（確認 state 清空後）再 `credential-bootstrap`，不要繞過此順序或改用 `-auto-approve`。
 - 不要讀取、印出或提交 secret；若需確認 secret 是否存在，只回報存在與否。
 - 不要修改 Terraform state、遠端 S3 state 或 GitHub Environment protection 設定，除非使用者明確要求。

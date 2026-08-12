@@ -93,21 +93,21 @@ check "credential_bootstrap_contract" {
       length(local.automation_identities) == 3 &&
       alltrue([
         for username, identity in local.automation_identities :
-        startswith(identity.profile_ssm_path, "/gitops/platform-access/automation/${username}/") &&
-        startswith(identity.password_ssm_path, "/gitops/platform-access/automation/${username}/") &&
+        startswith(identity.profile_ssm_path, "/gitops/openvpn-dns/automation/${username}/") &&
+        startswith(identity.password_ssm_path, "/gitops/openvpn-dns/automation/${username}/") &&
         endswith(identity.profile_ssm_path, "/PROFILE") &&
         endswith(identity.password_ssm_path, "/PASSWORD") &&
-        identity.public_egress == contains(["ci-cluster", "ci-infra"], username) &&
+        identity.public_egress == contains(["ci-cluster", "ci-argocd"], username) &&
         local.automation_identity_ip_numbers[username] > local.automation_identity_cidr_range.first + 1 &&
         local.automation_identity_ip_numbers[username] < local.automation_identity_cidr_range.last - 1
       ]) &&
       length(distinct([
         for identity in values(local.automation_identities) : identity.conn_ip
       ])) == length(local.automation_identities) &&
-      startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_admin_password, "/gitops/platform-access/") &&
-      startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64, "/gitops/platform-access/") &&
-      startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_public_key, "/gitops/platform-access/")
+      startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_admin_password, "/gitops/openvpn-dns/") &&
+      startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_private_key_b64, "/gitops/openvpn-dns/") &&
+      startswith(local.deployment_config.aws.ssm_parameter_paths.openvpn_ssh_public_key, "/gitops/openvpn-dns/")
     )
-    error_message = "Credential bootstrap must use the approved Platform Access SSM contract."
+    error_message = "Credential bootstrap must use the approved OpenVPN/DNS SSM contract."
   }
 }

@@ -77,7 +77,7 @@ expected_tunnel_ip="${VPN_EXPECTED_TUNNEL_IP:-}"
 route_targets="${VPN_ROUTE_TARGETS:-}"
 health_targets="${VPN_HEALTH_TARGETS:-}"
 
-[[ "${identity}" =~ ^ci-(cluster|infra|user-provisioning)$ ]] || {
+[[ "${identity}" =~ ^ci-(cluster|argocd|user-provisioning)$ ]] || {
   echo "invalid automation VPN identity" >&2
   exit 2
 }

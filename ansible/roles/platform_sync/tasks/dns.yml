@@ -1,5 +1,5 @@
 ---
-# 只新增獨立的 endpoint 檔，不觸碰 BASE 的 platform-access-base.conf。
+# 只新增獨立的 endpoint 檔，不觸碰 BASE 的 openvpn-dns-base.conf。
 # 後者由 dnsmasq role 以 template 管理，且其第一行明載 BASE 不含 endpoint
 # record，是刻意的設計聲明。
 #
@@ -18,7 +18,7 @@
 
 - name: Publish the ArgoCD endpoint host record
   ansible.builtin.template:
-    src: platform-access-endpoint.conf.j2
+    src: openvpn-dns-endpoint.conf.j2
     dest: "{{ sync_dnsmasq_config_path }}"
     owner: root
     group: root

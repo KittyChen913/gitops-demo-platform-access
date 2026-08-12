@@ -1,4 +1,4 @@
-name: "Platform Access tagged deployment"
+name: "OpenVPN/DNS tagged deployment"
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: "platform-access-mutation"
+  group: "openvpn-dns-mutation"
   cancel-in-progress: false
 
 jobs:
@@ -138,7 +138,7 @@ jobs:
       - name: "Terraform init"
         run: |
           set -euo pipefail
-          work="${RUNNER_TEMP}/platform-access-base-bootstrap-http"
+          work="${RUNNER_TEMP}/openvpn-dns-base-bootstrap-http"
           mkdir -p "${work}"
           backend_file="${work}/base-backend.hcl"
           root="$(bash scripts/resolve-terraform-backend.sh base "${backend_file}")"
@@ -175,10 +175,10 @@ jobs:
 
       - name: "Remove bootstrap HTTP cleanup bundle"
         if: always()
-        run: rm -rf "${RUNNER_TEMP}/platform-access-base-bootstrap-http"
+        run: rm -rf "${RUNNER_TEMP}/openvpn-dns-base-bootstrap-http"
 
   configure-base:
     name: "Configure BASE"
     needs: reconcile-bootstrap-http
-    uses: ./.github/workflows/platform-base-configure.yml
+    uses: ./.github/workflows/openvpn-dns-base-configure.yml
     secrets: inherit

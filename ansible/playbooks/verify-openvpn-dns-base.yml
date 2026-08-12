@@ -1,5 +1,5 @@
 ---
-- name: Verify Platform Access BASE configuration
+- name: Verify OpenVPN/DNS BASE configuration
   hosts: openvpn_servers
   become: true
   gather_facts: false

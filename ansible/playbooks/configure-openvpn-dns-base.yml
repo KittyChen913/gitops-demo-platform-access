@@ -1,5 +1,5 @@
 ---
-- name: Configure Shared Platform Access BASE
+- name: Configure Shared OpenVPN/DNS BASE
   hosts: openvpn_servers
   become: true
   gather_facts: false

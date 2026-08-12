@@ -1,13 +1,13 @@
-name: "Platform Access endpoint SYNC"
+name: "OpenVPN/DNS endpoint SYNC"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 把 gitops-demo-infra 發布的 ArgoCD private endpoint 套進 Shared OpenVPN：
+# 把 gitops-demo-argocd 發布的 ArgoCD private endpoint 套進 Shared OpenVPN：
 # internal DNS host record、人員 group 的 access rule 與精確的 UFW forward 規則。
 #
 # 只能手動觸發，且刻意與 BASE 分開：SYNC 讀取
-# /gitops/<environment>/platform/argocd/ENDPOINT_IP，該 parameter 由 infra 的
+# /gitops/<environment>/platform/argocd/ENDPOINT_IP，該 parameter 由 argocd 的
 # private-network root 建立。BASE 部署時 endpoint 通常尚未存在，若把 SYNC 掛進
-# BASE 流程會必然失敗。正確順序為 BASE → infra apply → 本 workflow。
+# BASE 流程會必然失敗。正確順序為 BASE → argocd apply → 本 workflow。
 #
 # 與 terraform-deploy.yml 共用同一個 concurrency group，避免 SYNC 與 BASE
 # 部署同時對同一台 VPN Server 做變更。
@@ -29,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: "platform-access-mutation"
+  group: "openvpn-dns-mutation"
   cancel-in-progress: false
 
 jobs:
@@ -122,7 +122,7 @@ jobs:
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
             ansible-playbook -i "${INVENTORY}" \
               -e "sync_environment=${TARGET_ENVIRONMENT}" \
-              ansible/playbooks/configure-platform-access-sync.yml
+              ansible/playbooks/configure-openvpn-dns-sync.yml
 
       - name: "Close BASE access"
         if: always()

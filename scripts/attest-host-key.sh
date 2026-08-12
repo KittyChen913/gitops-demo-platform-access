@@ -36,7 +36,7 @@ if ! validate_ipv4 "${reserved_ip}" || [[ "${runner_cidr}" != */32 ]] || ! valid
   echo "invalid IPv4 contract" >&2
   exit 2
 fi
-[[ "${host_key_parameter}" == /gitops/platform-access/* && -f "${private_key_file}" ]] || { echo "invalid host-key or SSH credential contract" >&2; exit 2; }
+[[ "${host_key_parameter}" == /gitops/openvpn-dns/* && -f "${private_key_file}" ]] || { echo "invalid host-key or SSH credential contract" >&2; exit 2; }
 [[ -n "${LINODE_TOKEN:-}" && -n "${ssh_user}" && -n "${expected_label}" ]] || { echo "runtime credentials and identity inputs are required" >&2; exit 2; }
 if [[ ! "${admin_port}" =~ ^[1-9][0-9]{0,4}$ ]] || ((10#${admin_port} > 65535)); then
   echo "invalid OpenVPN Admin port" >&2

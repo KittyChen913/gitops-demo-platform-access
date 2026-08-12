@@ -63,7 +63,7 @@ runs:
       run: |
         set -euo pipefail
         umask 077
-        work_dir="${RUNNER_TEMP}/platform-access-configure-${GITHUB_JOB}"
+        work_dir="${RUNNER_TEMP}/openvpn-dns-configure-${GITHUB_JOB}"
         mkdir -p "${work_dir}"
         chmod 700 "${work_dir}"
         printf 'work_dir=%s\n' "${work_dir}" >> "${GITHUB_OUTPUT}"

@@ -7,17 +7,17 @@
       "repo": "gitops-demo-cluster",
       "purpose": "LKE and ArgoCD Kubernetes API access through VPN egress NAT",
       "public_egress": true,
-      "profile_ssm_path": "/gitops/platform-access/automation/ci-cluster/PROFILE",
-      "password_ssm_path": "/gitops/platform-access/automation/ci-cluster/PASSWORD",
+      "profile_ssm_path": "/gitops/openvpn-dns/automation/ci-cluster/PROFILE",
+      "password_ssm_path": "/gitops/openvpn-dns/automation/ci-cluster/PASSWORD",
       "conn_ip": "172.28.0.2"
     },
     {
-      "username": "ci-infra",
-      "repo": "gitops-demo-infra",
+      "username": "ci-argocd",
+      "repo": "gitops-demo-argocd",
       "purpose": "LKE and ArgoCD Kubernetes API access through VPN egress NAT",
       "public_egress": true,
-      "profile_ssm_path": "/gitops/platform-access/automation/ci-infra/PROFILE",
-      "password_ssm_path": "/gitops/platform-access/automation/ci-infra/PASSWORD",
+      "profile_ssm_path": "/gitops/openvpn-dns/automation/ci-argocd/PROFILE",
+      "password_ssm_path": "/gitops/openvpn-dns/automation/ci-argocd/PASSWORD",
       "conn_ip": "172.28.0.3"
     },
     {
@@ -25,8 +25,8 @@
       "repo": "gitops-demo-user-provisioning",
       "purpose": "Access Server local user and token API access on TCP 943",
       "public_egress": false,
-      "profile_ssm_path": "/gitops/platform-access/automation/ci-user-provisioning/PROFILE",
-      "password_ssm_path": "/gitops/platform-access/automation/ci-user-provisioning/PASSWORD",
+      "profile_ssm_path": "/gitops/openvpn-dns/automation/ci-user-provisioning/PROFILE",
+      "password_ssm_path": "/gitops/openvpn-dns/automation/ci-user-provisioning/PASSWORD",
       "conn_ip": "172.28.0.4"
     }
   ]

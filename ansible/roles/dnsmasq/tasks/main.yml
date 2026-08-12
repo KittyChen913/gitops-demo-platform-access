@@ -9,7 +9,7 @@
 
 - name: Atomically manage BASE dnsmasq configuration
   ansible.builtin.template:
-    src: platform-access-base.conf.j2
+    src: openvpn-dns-base.conf.j2
     dest: "{{ dnsmasq_base_config_path }}"
     owner: root
     group: root

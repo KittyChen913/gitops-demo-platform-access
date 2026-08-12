@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: "platform-access-mutation"
+  group: "openvpn-dns-mutation"
   cancel-in-progress: false
 
 jobs:
@@ -50,8 +50,8 @@ jobs:
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
-          bundle="${RUNNER_TEMP}/platform-access-destroy-plans"
-          work="${RUNNER_TEMP}/platform-access-destroy-work"
+          bundle="${RUNNER_TEMP}/openvpn-dns-destroy-plans"
+          work="${RUNNER_TEMP}/openvpn-dns-destroy-work"
           trap 'unset linode_token contact_email ssh_public_key 2>/dev/null || true; rm -rf "${bundle}" "${work}"' EXIT
           mkdir -p "${bundle}" "${work}"
           umask 077
@@ -102,14 +102,14 @@ jobs:
       - name: "Upload this run's destroy plans"
         uses: actions/upload-artifact@v7
         with:
-          name: platform-access-destroy-plans-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/platform-access-destroy-plans/
+          name: openvpn-dns-destroy-plans-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openvpn-dns-destroy-plans/
           if-no-files-found: error
           retention-days: 1
 
       - name: "Remove runner plan bundle"
         if: always()
-        run: rm -rf "${RUNNER_TEMP}/platform-access-destroy-plans"
+        run: rm -rf "${RUNNER_TEMP}/openvpn-dns-destroy-plans"
 
   destroy:
     name: "Apply verified destroy plans"
@@ -128,8 +128,8 @@ jobs:
       - name: "Download this run's destroy plans"
         uses: actions/download-artifact@v8
         with:
-          name: platform-access-destroy-plans-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/platform-access-destroy-plans
+          name: openvpn-dns-destroy-plans-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openvpn-dns-destroy-plans
 
       - name: "Verify saved plan checksums before credentials"
         env:
@@ -137,7 +137,7 @@ jobs:
           CREDENTIAL_PLAN_SHA256: ${{ needs.plan.outputs.credential_plan_sha256 }}
         run: |
           set -euo pipefail
-          bundle="${RUNNER_TEMP}/platform-access-destroy-plans"
+          bundle="${RUNNER_TEMP}/openvpn-dns-destroy-plans"
           verify_bundle() {
             local deployment="$1"
             local expected_sha256="$2"
@@ -162,8 +162,8 @@ jobs:
         run: |
           set -euo pipefail
           config="${GITHUB_WORKSPACE}/config/shared.json"
-          bundle="${RUNNER_TEMP}/platform-access-destroy-plans"
-          work="${RUNNER_TEMP}/platform-access-destroy-work"
+          bundle="${RUNNER_TEMP}/openvpn-dns-destroy-plans"
+          work="${RUNNER_TEMP}/openvpn-dns-destroy-work"
           trap 'unset linode_token 2>/dev/null || true; rm -rf "${bundle}" "${work}"' EXIT
           mkdir -p "${work}"
           umask 077
@@ -197,7 +197,7 @@ jobs:
             } | sort -u
           )
           for runtime_parameter_path in "${runtime_parameter_paths[@]}"; do
-            [[ "${runtime_parameter_path}" == /gitops/platform-access/* ]]
+            [[ "${runtime_parameter_path}" == /gitops/openvpn-dns/* ]]
             if aws ssm get-parameter \
               --name "${runtime_parameter_path}" \
               --query Parameter.Name \
@@ -214,7 +214,7 @@ jobs:
             jq -r '.aws.ssm_parameter_paths.vpnadmin_sudo_password' "${config}"
           )"
           test "${break_glass_parameter_path}" = \
-            "/gitops/platform-access/openvpn/break-glass/VPNADMIN_SUDO_PASSWORD"
+            "/gitops/openvpn-dns/openvpn/break-glass/VPNADMIN_SUDO_PASSWORD"
           if ! aws ssm delete-parameter \
             --name "${break_glass_parameter_path}" \
             >/dev/null 2>"${runtime_cleanup_error}" &&

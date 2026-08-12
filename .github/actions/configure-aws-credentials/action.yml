@@ -32,7 +32,7 @@ runs:
       uses: aws-actions/configure-aws-credentials@v6
       with:
         role-to-assume: ${{ steps.resolve.outputs.role_arn }}
-        role-session-name: platform-access-${{ github.run_id }}
+        role-session-name: openvpn-dns-${{ github.run_id }}
         aws-region: ${{ steps.resolve.outputs.aws_region }}
         mask-aws-account-id: true
         unset-current-credentials: true

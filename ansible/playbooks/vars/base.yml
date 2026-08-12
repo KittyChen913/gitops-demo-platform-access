@@ -26,7 +26,7 @@ upstream_dns_servers: "{{ platform_config.network.upstream_dns_servers }}"
 # 版本不足時 ConfigPut 可能保存未知 key，卻仍讓 runtime 繼續使用主機 public DNS，
 # 因此 BASE 必須在任何設定變更前 fail closed。
 openvpn_dns_proxy_upstream_minimum_version: "3.2.1"
-dnsmasq_base_config_path: /etc/dnsmasq.d/platform-access-base.conf
+dnsmasq_base_config_path: /etc/dnsmasq.d/openvpn-dns-base.conf
 # ss -p 的 process 欄位必須精確辨識 dnsmasq；若 metadata 缺失，必要 listener 的
 # assertion 會 fail closed，不得只依位址推定 owner。
 dns_listener_process_metadata_pattern: 'users:\(\('

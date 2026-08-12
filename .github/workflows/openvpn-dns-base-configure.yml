@@ -1,4 +1,4 @@
-name: "Platform Access reusable BASE configuration"
+name: "OpenVPN/DNS reusable BASE configuration"
 
 on:
   workflow_call:
@@ -147,7 +147,7 @@ jobs:
         run: |
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml --tags verify-vpn-routing
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-openvpn-dns-base.yml --tags verify-vpn-routing
 
       - name: "Verify OpenVPN service"
         env:
@@ -155,7 +155,7 @@ jobs:
         run: |
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml --tags verify-openvpn
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-openvpn-dns-base.yml --tags verify-openvpn
 
       - name: "Verify dnsmasq configuration"
         env:
@@ -163,7 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml --tags verify-dnsmasq
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-openvpn-dns-base.yml --tags verify-dnsmasq
 
       - name: "Verify DNS exposure"
         env:
@@ -171,7 +171,7 @@ jobs:
         run: |
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml --tags verify-dns-exposure
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-openvpn-dns-base.yml --tags verify-dns-exposure
 
       - name: "Verify automation VPN identities"
         env:
@@ -180,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           ANSIBLE_CONFIG="${GITHUB_WORKSPACE}/ansible/ansible.cfg" \
-            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-platform-access-base.yml \
+            ansible-playbook -i "${INVENTORY}" ansible/playbooks/verify-openvpn-dns-base.yml \
               --tags verify-automation-identities
 
       # verify-automation-identities 只查 sacli 屬性值，沒真的開過 tunnel。
@@ -247,7 +247,7 @@ jobs:
 
           test "${ssh_user}" = "vpnadmin"
           test "${parameter_path}" = \
-            "/gitops/platform-access/openvpn/break-glass/VPNADMIN_SUDO_PASSWORD"
+            "/gitops/openvpn-dns/openvpn/break-glass/VPNADMIN_SUDO_PASSWORD"
           [[ "${INSTANCE_ID}" =~ ^[0-9]+$ ]]
 
           ssh \

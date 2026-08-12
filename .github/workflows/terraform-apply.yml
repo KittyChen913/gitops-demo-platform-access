@@ -1,4 +1,4 @@
-name: "Platform Access reusable deployment stage"
+name: "OpenVPN/DNS reusable deployment stage"
 
 on:
   workflow_call:
@@ -50,8 +50,8 @@ jobs:
           DEPLOYMENT: ${{ inputs.deployment }}
         run: |
           set -euo pipefail
-          bundle="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan"
-          work="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-plan-work"
+          bundle="${RUNNER_TEMP}/openvpn-dns-${DEPLOYMENT}-apply-plan"
+          work="${RUNNER_TEMP}/openvpn-dns-${DEPLOYMENT}-plan-work"
           mkdir -p "${bundle}" "${work}"
           backend_file="${work}/${DEPLOYMENT}-backend.hcl"
           root="$(bash scripts/resolve-terraform-backend.sh "${DEPLOYMENT}" "${backend_file}")"
@@ -120,8 +120,8 @@ jobs:
       - name: "Upload minimal saved-plan artifact"
         uses: actions/upload-artifact@v7
         with:
-          name: platform-access-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/platform-access-${{ inputs.deployment }}-apply-plan/terraform.tfplan
+          name: openvpn-dns-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openvpn-dns-${{ inputs.deployment }}-apply-plan/terraform.tfplan
           if-no-files-found: error
           retention-days: 1
 
@@ -129,8 +129,8 @@ jobs:
         if: always()
         run: |
           rm -rf \
-            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-plan" \
-            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-plan-work"
+            "${RUNNER_TEMP}/openvpn-dns-${{ inputs.deployment }}-apply-plan" \
+            "${RUNNER_TEMP}/openvpn-dns-${{ inputs.deployment }}-plan-work"
 
   apply-tagged-plan:
     name: "Apply [${{ inputs.deployment }}]"
@@ -152,8 +152,8 @@ jobs:
       - name: "Download this run's saved plan"
         uses: actions/download-artifact@v8
         with:
-          name: platform-access-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/platform-access-${{ inputs.deployment }}-apply-plan
+          name: openvpn-dns-${{ inputs.deployment }}-apply-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openvpn-dns-${{ inputs.deployment }}-apply-plan
 
       - name: "Verify saved plan checksum before credentials"
         env:
@@ -161,7 +161,7 @@ jobs:
           EXPECTED_PLAN_SHA256: ${{ needs.plan.outputs.plan_sha256 }}
         run: |
           set -euo pipefail
-          plan_file="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan/terraform.tfplan"
+          plan_file="${RUNNER_TEMP}/openvpn-dns-${DEPLOYMENT}-apply-plan/terraform.tfplan"
           test -f "${plan_file}"
           test ! -L "${plan_file}"
           [[ "${EXPECTED_PLAN_SHA256}" =~ ^[0-9a-f]{64}$ ]]
@@ -178,8 +178,8 @@ jobs:
           DEPLOYMENT: ${{ inputs.deployment }}
         run: |
           set -euo pipefail
-          bundle="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-plan"
-          work="${RUNNER_TEMP}/platform-access-${DEPLOYMENT}-apply-work"
+          bundle="${RUNNER_TEMP}/openvpn-dns-${DEPLOYMENT}-apply-plan"
+          work="${RUNNER_TEMP}/openvpn-dns-${DEPLOYMENT}-apply-work"
           mkdir -p "${work}"
           backend_file="${work}/${DEPLOYMENT}-backend.hcl"
           root="$(bash scripts/resolve-terraform-backend.sh "${DEPLOYMENT}" "${backend_file}")"
@@ -301,5 +301,5 @@ jobs:
         if: always()
         run: |
           rm -rf \
-            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-plan" \
-            "${RUNNER_TEMP}/platform-access-${{ inputs.deployment }}-apply-work"
+            "${RUNNER_TEMP}/openvpn-dns-${{ inputs.deployment }}-apply-plan" \
+            "${RUNNER_TEMP}/openvpn-dns-${{ inputs.deployment }}-apply-work"
