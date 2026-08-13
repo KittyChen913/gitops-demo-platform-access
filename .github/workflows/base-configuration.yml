@@ -1,4 +1,4 @@
-name: "OpenVPN/DNS reusable BASE configuration"
+name: "Base Configuration"
 
 on:
   workflow_call:

@@ -1,4 +1,4 @@
-name: "OpenVPN/DNS endpoint SYNC"
+name: "Endpoint Sync"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 把 gitops-demo-argocd 發布的 ArgoCD private endpoint 套進 Shared OpenVPN：
@@ -9,7 +9,7 @@ name: "OpenVPN/DNS endpoint SYNC"
 # private-network root 建立。BASE 部署時 endpoint 通常尚未存在，若把 SYNC 掛進
 # BASE 流程會必然失敗。正確順序為 BASE → argocd apply → 本 workflow。
 #
-# 與 terraform-deploy.yml 共用同一個 concurrency group，避免 SYNC 與 BASE
+# 與 deployment.yml 共用同一個 concurrency group，避免 SYNC 與 BASE
 # 部署同時對同一台 VPN Server 做變更。
 # ──────────────────────────────────────────────────────────────────────────────
 

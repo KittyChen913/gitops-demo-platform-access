@@ -1,4 +1,4 @@
-name: "OpenVPN/DNS tagged deployment"
+name: "Deployment"
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   validate-deployment-tag:
-    name: "Validate deployment Tag"
+    name: "Validate"
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -100,7 +100,7 @@ jobs:
   credential-bootstrap:
     name: "Deploy credential-bootstrap"
     needs: ensure-state-backend
-    uses: ./.github/workflows/terraform-apply.yml
+    uses: ./.github/workflows/terraform-apply-stage.yml
     with:
       deployment: credential-bootstrap
     secrets: inherit
@@ -108,7 +108,7 @@ jobs:
   base:
     name: "Deploy BASE"
     needs: credential-bootstrap
-    uses: ./.github/workflows/terraform-apply.yml
+    uses: ./.github/workflows/terraform-apply-stage.yml
     with:
       deployment: base
     secrets: inherit
@@ -180,5 +180,5 @@ jobs:
   configure-base:
     name: "Configure BASE"
     needs: reconcile-bootstrap-http
-    uses: ./.github/workflows/openvpn-dns-base-configure.yml
+    uses: ./.github/workflows/base-configuration.yml
     secrets: inherit

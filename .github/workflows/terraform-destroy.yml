@@ -1,4 +1,4 @@
-name: "Destroy platform access"
+name: "Terraform Destroy"
 
 on:
   workflow_dispatch:
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   plan:
-    name: "Plan and verify destroy"
+    name: "Plan Destroy"
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -112,7 +112,7 @@ jobs:
         run: rm -rf "${RUNNER_TEMP}/openvpn-dns-destroy-plans"
 
   destroy:
-    name: "Apply verified destroy plans"
+    name: "Destroy"
     needs: plan
     runs-on: ubuntu-latest
     permissions:

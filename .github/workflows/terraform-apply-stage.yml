@@ -1,4 +1,4 @@
-name: "OpenVPN/DNS reusable deployment stage"
+name: "Terraform Apply Stage"
 
 on:
   workflow_call:
