@@ -18,6 +18,11 @@
 - 優先沿用現有 Shell 與 workflow `run` block；不得建立不必要的 helper、adapter、framework 或跨 Repo library。
 - 不維護 Unit Test、mock、fixture、fake adapter 或 test-only helper。
 - `config/shared.json` 是 Shared BASE 的 canonical configuration；`config/environments/<environment>.json` 只保存對應環境 SYNC 的授權 group，不得複製可由 environment 與 Shared config 推導的 SSM path、hostname、port、protocol 或 index。
+- AWS 憑證一律經 `.github/actions/configure-aws-credentials` 取得；workflow 與其他 composite action 都不得直接呼叫 `aws-actions/configure-aws-credentials`。
+- 呼叫該 action 時**只傳語意 selector**（本 repo 目前只有 `role: deployment`），不得傳 IAM Role 名稱或 ARN。IAM Role 名稱與 AWS region 的字面值只存在於 `config/shared.json` 的 `.aws.oidc_roles` 與 `.aws.region`；`.github/` 底下不得再出現 `github-oidc-` 開頭的字串或寫死的 region。
+- 新增 Role 的正確做法是「在 `.aws.oidc_roles` 加一個 key ＋ 呼叫端改傳新 selector」，action 邏輯不動。讀取端必須驗證 selector 對應值是非空字串。
+- `config/shared.json` 的 `schema_version` 由讀取端以 `jq -e` 驗證，不符即 `exit 1`；改動契約檔結構時必須同步升版號與所有讀取端的期望值（目前為 `3`）。
+- OIDC 憑證步驟的遮蔽範圍是固定契約：**帳號 ID 在寫入 `GITHUB_OUTPUT` 前先 `::add-mask::`，完整 Role ARN 一律不遮蔽**。Role 名稱不是機密，遮蔽它會讓 `AssumeRoleWithWebIdentity` 的失敗訊息無法判讀；帳號 ID 則另有 `mask-aws-account-id: true` 作為第二層。不得把整個 ARN 加回遮罩，也不得移除 action 內既有的 `::add-mask::${AWS_ACCOUNT_ID}`。
 - Dev 與 Prod 的 SYNC contract 不得交叉：`access_to` 索引依各 group 的授權環境順序緊密排列，不得產生空洞；未授權的 group 必須驗證所有 `access_to.*` 都沒有該 endpoint 規則。
 - Credential、Secret、Terraform state、plan JSON 與 private key 不得輸出到 log、summary 或 artifact。
 - `vpnadmin` 的直接 VM SSH 只使用 `OPENVPN_SSH_PRIVATE_KEY_B64` 對應的 key-based authentication；Linux password 不得用來啟用 SSH password authentication。該 password 只作為登入後 `sudo` 與 LISH console fallback credential，以 SSM `SecureString` escrow；deployment Role 只可寫入／刪除，日常 workflow 不得讀回，讀取權限只授予指定 SRE Role。escrow step 必須排在 BASE configuration 與所有驗證之後，不得成為其他設定步驟的前置條件；密碼只以 `--cli-input-json` 傳給 AWS CLI，不得出現在 process arguments。
@@ -25,7 +30,7 @@
 
 ## 安全與破壞性操作
 
-- 不要主動執行 `terraform apply`，或手動觸發 `openvpn-dns-base-configure.yml`、`terraform-deploy.yml`、`terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
+- 不要主動執行 `terraform apply`，或手動觸發 `base-configuration.yml`、`deployment.yml`、`terraform-destroy.yml` 等會改變或刪除雲端資源的命令，除非使用者明確要求。
 - destroy 只能由 `terraform-destroy.yml` 手動觸發，需輸入 `DESTROY-SHARED-ALL` 確認字串；apply 順序固定先 `base`（確認 state 清空後）再 `credential-bootstrap`，不要繞過此順序或改用 `-auto-approve`。
 - 不要讀取、印出或提交 secret；若需確認 secret 是否存在，只回報存在與否。
 - 不要修改 Terraform state、遠端 S3 state 或 GitHub Environment protection 設定，除非使用者明確要求。
@@ -48,3 +53,4 @@
 - 完整 CI／quality workflow、Terraform plan、apply、Ansible runtime 與外部 integration verification 屬 PR、merge、release、deployment 或獨立驗收 gate，不是每次本機局部修改後的預設 validation。
 - Code Review validation 依全域規則使用固定版本、network-disabled、read-only Docker Container；不得在本機 validation 存取 AWS、Linode、OpenVPN 或其他外部 runtime。
 - dependencies、Container Image 或安全執行條件不可用時，將對應 validation 標示為 `BLOCKED` 或 `NOT RUN`，並說明替代靜態驗證與未取得的信心。
+- `validation.yml` 執行兩個 Terraform root 的 fmt 與 validate、actionlint、ShellCheck、YAML lint 與 Ansible syntax check；靜態驗證不執行 cloud Plan、Apply、Destroy 或其他 runtime mutation。
