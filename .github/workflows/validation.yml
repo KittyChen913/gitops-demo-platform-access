@@ -64,6 +64,17 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v7
 
+      - name: "Validate OIDC repository contract"
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -e '
+            def nonempty_string: type == "string" and length > 0;
+            .schema_version == 3
+            and (.aws.region | nonempty_string)
+            and (.aws.oidc_roles.deployment | nonempty_string)
+          ' config/shared.json >/dev/null
+
       - name: "Actionlint"
         run: >-
           docker run --rm

@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "repository": {
     "slug": "KittyChen913/gitops-demo-openvpn-dns",
     "operations_ref": "refs/heads/master",
@@ -7,7 +7,9 @@
   },
   "aws": {
     "region": "ap-southeast-1",
-    "oidc_role_name": "github-oidc-gitops-demo-openvpn-dns-role",
+    "oidc_roles": {
+      "deployment": "github-oidc-gitops-demo-openvpn-dns-role"
+    },
     "ssm_parameter_paths": {
       "linode_token": "/gitops/shared/LINODE_TOKEN",
       "openvpn_contact_email": "/gitops/shared/OPENVPN_CONTACT_EMAIL",
